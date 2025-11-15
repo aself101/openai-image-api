@@ -7,14 +7,13 @@ This service follows the data-collection architecture pattern with organized dat
 ## Quick Start
 
 ```bash
-# Install dependencies
-cd openai-api
-npm install
+# Install globally
+npm install -g openai-image-api
 
 export OPENAI_API_KEY="your-api-key-here"
 
 # Generate an image
-npm run openai -- --dalle-3 --prompt "a serene mountain landscape"
+openai-img --dalle-3 --prompt "a serene mountain landscape"
 ```
 
 ## Table of Contents
@@ -37,11 +36,12 @@ The OpenAI Image Generation API provides access to state-of-the-art image genera
 - **3 Generation Models** - DALL-E 2, DALL-E 3, GPT Image 1
 - **3 Operation Modes** - Generate, Edit, Variation
 - **Parameter Validation** - Pre-flight validation catches invalid parameters before API calls
+- **Security Hardened** - SSRF protection, input validation, rate limiting, log sanitization
 - **API Key Authentication** - Simple Bearer token authentication
 - **Batch Processing** - Generate multiple images sequentially from multiple prompts
 - **Organized Storage** - Structured directories with timestamped files and metadata
 - **CLI Orchestration** - Command-line tool for easy batch generation
-- **Comprehensive Testing** - 60+ tests with Vitest for reliability
+- **Comprehensive Testing** - 128 tests with Vitest for reliability
 
 ## Models
 
@@ -142,10 +142,24 @@ If you want to use the **gpt-image-1** model, you must verify your OpenAI organi
 
 ## Installation
 
-### Install Dependencies
+### Option 1: Install from npm (Recommended)
 
 ```bash
-cd openai-api
+# Install globally for CLI usage
+npm install -g openai-image-api
+
+# Or install locally in your project
+npm install openai-image-api
+```
+
+### Option 2: Install from source
+
+```bash
+# Clone the repository
+git clone https://github.com/aself101/img-gen.git
+cd img-gen/openai-api
+
+# Install dependencies
 npm install
 ```
 
@@ -156,16 +170,91 @@ Dependencies:
 - `form-data` - Multipart form data for file uploads
 - `winston` - Logging framework
 
+## Quick Start
+
+### Using the CLI
+
+The CLI command depends on how you installed the package:
+
+**If installed globally** (`npm install -g openai-image-api`):
+```bash
+openai-img --examples                         # Show usage examples
+openai-img --dalle-3 --prompt "a cat"         # Generate with DALL-E 3
+```
+
+**If installed locally** in a project:
+```bash
+npx openai-img --examples                     # Show usage examples
+npx openai-img --dalle-3 --prompt "a cat"     # Generate with DALL-E 3
+```
+
+**If working from source** (cloned repository):
+```bash
+npm run openai:examples                       # Show usage examples
+npm run openai -- --dalle-3 --prompt "a cat"  # Generate
+```
+
+### Example Commands
+
+```bash
+# Show examples
+openai-img --examples
+
+# Generate with DALL-E 3
+openai-img --dalle-3 --prompt "a serene mountain landscape"
+
+# Generate with GPT Image 1 (transparent background)
+openai-img --gpt-image-1 --prompt "a cute robot" --background transparent
+
+# Edit image with DALL-E 2
+openai-img --dalle-2 --edit --image photo.png --prompt "add snow"
+
+# Batch generation
+openai-img --dalle-3 \
+  --prompt "a cat" \
+  --prompt "a dog" \
+  --prompt "a bird"
+```
+
+**Note:** Examples below use `openai-img` directly (global install). If using local install, prefix with `npx`: `npx openai-img --dalle-3 ...`
+
+### Using the API Class Directly
+
+```javascript
+// If installed via npm
+import { OpenAIImageAPI } from 'openai-image-api';
+
+// If running from source
+import { OpenAIImageAPI } from './api.js';
+
+// Initialize the API
+const api = new OpenAIImageAPI();
+
+// Generate with DALL-E 3
+const result = await api.generateImage({
+  prompt: 'a beautiful sunset',
+  model: 'dall-e-3',
+  size: '1024x1024',
+  quality: 'hd',
+  style: 'vivid'
+});
+
+console.log('Generated images:', result.data);
+```
+
 ## CLI Usage
 
 ### Basic Command Structure
 
 ```bash
+# Global install
+openai-img [model] [options]
+
+# Local install (use npx)
+npx openai-img [model] [options]
+
 # From source (development)
 npm run openai -- [model] [options]
-
-# If installed globally
-openai-img [model] [options]
 ```
 
 ### Model Selection (Required)
@@ -353,7 +442,11 @@ npm run openai -- --dalle-3 \
 ### Example 7: Using API Class in Code
 
 ```javascript
-import { OpenAIImageAPI } from './api.js';
+// If installed via npm
+import { OpenAIImageAPI } from 'openai-image-api';
+
+// If running from source
+// import { OpenAIImageAPI } from './api.js';
 
 const api = new OpenAIImageAPI();
 
@@ -439,7 +532,7 @@ npm run test:coverage
 
 ### Test Coverage
 
-The test suite includes 60+ tests covering:
+The test suite includes 128 tests covering:
 - API authentication and key validation
 - All three generation methods (generate, edit, variation)
 - All three models (DALL-E 2, DALL-E 3, GPT Image 1)
