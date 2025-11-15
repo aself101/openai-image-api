@@ -1,0 +1,73 @@
+{
+  "name": "openai-image-api",
+  "version": "1.0.0",
+  "description": "OpenAI Image Generation API wrapper - DALL-E and GPT Image models for Node.js with CLI",
+  "main": "api.js",
+  "type": "module",
+  "bin": {
+    "openai-img": "cli.js"
+  },
+  "exports": {
+    ".": "./api.js",
+    "./api": "./api.js",
+    "./utils": "./utils.js",
+    "./config": "./config.js"
+  },
+  "files": [
+    "api.js",
+    "cli.js",
+    "utils.js",
+    "config.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "openai": "node cli.js",
+    "openai:help": "node cli.js --help",
+    "openai:examples": "node cli.js --examples",
+    "openai:dalle2": "node cli.js --dalle-2",
+    "openai:dalle3": "node cli.js --dalle-3",
+    "openai:gpt-image": "node cli.js --gpt-image-1",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest run --coverage"
+  },
+  "keywords": [
+    "openai",
+    "dall-e",
+    "dall-e-2",
+    "dall-e-3",
+    "gpt-image-1",
+    "image-generation",
+    "ai-image",
+    "text-to-image",
+    "image-edit",
+    "image-variation",
+    "cli"
+  ],
+  "author": "img-gen Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aself101/img-gen.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aself101/img-gen/issues"
+  },
+  "homepage": "https://github.com/aself101/img-gen#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "commander": "^11.1.0",
+    "dotenv": "^16.3.1",
+    "form-data": "^4.0.0",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.9",
+    "@vitest/coverage-v8": "^4.0.9"
+  }
+}
