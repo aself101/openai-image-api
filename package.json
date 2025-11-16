@@ -1,6 +1,6 @@
 {
   "name": "openai-image-api",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "OpenAI Image Generation API wrapper - DALL-E and GPT Image models for Node.js with CLI",
   "main": "api.js",
   "type": "module",
@@ -50,12 +50,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aself101/img-gen.git"
+    "url": "git+https://github.com/aself101/openai-image-api.git"
   },
   "bugs": {
-    "url": "https://github.com/aself101/img-gen/issues"
+    "url": "https://github.com/aself101/openai-image-api/issues"
   },
-  "homepage": "https://github.com/aself101/img-gen#readme",
+  "homepage": "https://github.com/aself101/openai-image-api#readme",
   "engines": {
     "node": ">=18.0.0"
   },

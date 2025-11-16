@@ -156,8 +156,8 @@ npm install openai-image-api
 
 ```bash
 # Clone the repository
-git clone https://github.com/aself101/img-gen.git
-cd img-gen/openai-api
+git clone https://github.com/aself101/openai-image-api.git
+cd openai-image-api
 
 # Install dependencies
 npm install
