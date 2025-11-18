@@ -1,5 +1,10 @@
 # OpenAI Image Generation Service
 
+[![npm version](https://img.shields.io/npm/v/openai-image-api.svg)](https://www.npmjs.com/package/openai-image-api)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node.js Version](https://img.shields.io/node/v/openai-image-api)](https://nodejs.org)
+[![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen)](test/)
+
 A Node.js wrapper for the [OpenAI Image Generation API](https://platform.openai.com/docs/api-reference/images) that provides easy access to DALL-E 2, DALL-E 3, and GPT Image 1 models. Generate, edit, and create variations of AI images with a simple command-line interface.
 
 This service follows the data-collection architecture pattern with organized data storage, comprehensive logging, parameter validation, and CLI orchestration.
@@ -50,27 +55,48 @@ The OpenAI Image Generation API provides access to state-of-the-art image genera
 Basic image generation with multiple size options and variations support.
 
 **Best for:** Cost-effective generation, creating variations, simple edits
-**Sizes:** 256x256, 512x512, 1024x1024
+
+**Parameters:**
+- `prompt` - Text description of desired image (required for generation)
+- `size` - Image dimensions (256x256, 512x512, 1024x1024)
+- `n` - Number of images to generate (1-10)
+- `image` - Input image for edits/variations (PNG with transparency)
+- `mask` - Mask image for edits (PNG with transparency, edit areas transparent)
+
 **Features:** Generate, edit, variations
-**Max images:** 1-10 per request
 
 ### DALL-E 3
 
 High-quality image generation with HD support and style control.
 
 **Best for:** Professional quality, detailed images, specific styles
-**Sizes:** 1024x1024, 1792x1024 (landscape), 1024x1792 (portrait)
+
+**Parameters:**
+- `prompt` - Text description of desired image (required)
+- `size` - Image dimensions (1024x1024, 1792x1024 landscape, 1024x1792 portrait)
+- `quality` - Output quality (standard, hd)
+- `style` - Image style (vivid, natural)
+- `n` - Always 1 (DALL-E 3 only generates one image at a time)
+
 **Features:** HD quality, vivid/natural styles
-**Max images:** 1 per request (n=1 only)
 
 ### GPT Image 1
 
 Advanced image generation with transparency, multi-image editing, and compression control.
 
 **Best for:** Transparent backgrounds, multi-image edits, advanced control
-**Sizes:** 1024x1024, 1536x1024, 1024x1536, auto
+
+**Parameters:**
+- `prompt` - Text description of desired image (required)
+- `size` - Image dimensions (1024x1024, 1536x1024, 1024x1536, auto)
+- `n` - Number of images to generate (1-10)
+- `format` - Output format (png, jpeg, webp)
+- `compression` - Compression quality (0-100, for JPEG/WebP)
+- `transparency` - Enable transparent backgrounds (boolean)
+- `images` - Multiple input images for editing (array)
+- `moderation` - Content moderation control
+
 **Features:** Transparent backgrounds, multi-image editing, compression, moderation control
-**Formats:** PNG, JPEG, WebP with compression control
 
 **⚠️ IMPORTANT:** GPT Image 1 requires a verified organization. See [Organization Verification](#organization-verification) below.
 
@@ -670,6 +696,15 @@ npm run openai:dalle3 -- --prompt "a cat" --quality hd
 - [OpenAI API Documentation](https://platform.openai.com/docs/api-reference/images)
 - [OpenAI Platform](https://platform.openai.com/)
 - [Image Generation Guide](https://platform.openai.com/docs/guides/images)
+
+## Related Packages
+
+- [`bfl-api`](https://github.com/aself101/bfl-api) – FLUX & Kontext
+- [`stability-ai-api`](https://github.com/aself101/stability-ai-api) – Stable Diffusion 3.5 + upscalers
+
+---
+
+**Disclaimer:** This project is an independent community wrapper and is not affiliated with OpenAI.
 
 ## License
 

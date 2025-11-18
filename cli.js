@@ -154,7 +154,7 @@ ${'='.repeat(70)}
 program
   .name('openai-img')
   .description('OpenAI Image Generation CLI - DALL-E and GPT Image models')
-  .version('1.0.0');
+  .version('1.0.1');
 
 // Model selection (mutually exclusive)
 program
