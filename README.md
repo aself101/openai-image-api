@@ -11,6 +11,7 @@ This service follows the data-collection architecture pattern with organized dat
 
 ## Quick Start
 
+### CLI Usage
 ```bash
 # Install globally
 npm install -g openai-image-api
@@ -19,6 +20,22 @@ export OPENAI_API_KEY="your-api-key-here"
 
 # Generate an image
 openai-img --dalle-3 --prompt "a serene mountain landscape"
+```
+
+### Programmatic Usage
+```javascript
+import { OpenAIImageAPI } from 'openai-image-api';
+
+const api = new OpenAIImageAPI();
+
+// Generate an image with DALL-E 3
+const result = await api.generateDallE3({
+  prompt: 'a serene mountain landscape',
+  quality: 'hd',
+  size: '1792x1024'
+});
+
+console.log('Image URL:', result.data[0].url);
 ```
 
 ## Table of Contents
