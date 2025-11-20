@@ -11,9 +11,14 @@ import {
   getOutputDir,
   validateModelParams,
   getModelConstraints,
+  validateVideoParams,
+  getVideoModelConstraints,
   MODELS,
   ENDPOINTS,
-  MODEL_CONSTRAINTS
+  MODEL_CONSTRAINTS,
+  VIDEO_MODELS,
+  VIDEO_ENDPOINTS,
+  VIDEO_MODEL_CONSTRAINTS
 } from '../config.js';
 
 describe('Configuration', () => {
@@ -334,6 +339,240 @@ describe('Configuration', () => {
 
     it('should reject empty string', () => {
       expect(validateApiKeyFormat('')).toBe(false);
+    });
+  });
+
+  describe('Video Configuration (Sora)', () => {
+    describe('VIDEO_ENDPOINTS', () => {
+      it('should have all video endpoints defined', () => {
+        expect(VIDEO_ENDPOINTS.create).toBe('/v1/videos');
+        expect(VIDEO_ENDPOINTS.retrieve).toBe('/v1/videos/{video_id}');
+        expect(VIDEO_ENDPOINTS.content).toBe('/v1/videos/{video_id}/content');
+        expect(VIDEO_ENDPOINTS.remix).toBe('/v1/videos/{video_id}/remix');
+        expect(VIDEO_ENDPOINTS.list).toBe('/v1/videos');
+        expect(VIDEO_ENDPOINTS.delete).toBe('/v1/videos/{video_id}');
+      });
+
+      it('should use placeholders for video_id', () => {
+        expect(VIDEO_ENDPOINTS.retrieve).toContain('{video_id}');
+        expect(VIDEO_ENDPOINTS.content).toContain('{video_id}');
+        expect(VIDEO_ENDPOINTS.remix).toContain('{video_id}');
+        expect(VIDEO_ENDPOINTS.delete).toContain('{video_id}');
+      });
+    });
+
+    describe('VIDEO_MODELS', () => {
+      it('should have sora-2 model mapping', () => {
+        expect(VIDEO_MODELS['sora-2']).toBe('sora-2');
+      });
+
+      it('should have sora-2-pro model mapping', () => {
+        expect(VIDEO_MODELS['sora-2-pro']).toBe('sora-2-pro');
+      });
+    });
+
+    describe('VIDEO_MODEL_CONSTRAINTS', () => {
+      it('should have constraints for all video models', () => {
+        expect(VIDEO_MODEL_CONSTRAINTS['sora-2']).toBeDefined();
+        expect(VIDEO_MODEL_CONSTRAINTS['sora-2-pro']).toBeDefined();
+      });
+
+      it('should have correct size constraints for sora-2', () => {
+        const constraints = VIDEO_MODEL_CONSTRAINTS['sora-2'];
+        expect(constraints.sizes).toContain('720x1280');
+        expect(constraints.sizes).toContain('1280x720');
+        expect(constraints.sizes).toContain('1024x1792');
+        expect(constraints.sizes).toContain('1792x1024');
+      });
+
+      it('should have correct duration constraints for sora-2', () => {
+        const constraints = VIDEO_MODEL_CONSTRAINTS['sora-2'];
+        expect(constraints.seconds).toEqual([4, 8, 12]);
+      });
+
+      it('should have correct prompt length limit', () => {
+        expect(VIDEO_MODEL_CONSTRAINTS['sora-2'].promptMaxLength).toBe(10000);
+        expect(VIDEO_MODEL_CONSTRAINTS['sora-2-pro'].promptMaxLength).toBe(10000);
+      });
+
+      it('should have correct polling configuration', () => {
+        const constraints = VIDEO_MODEL_CONSTRAINTS['sora-2'];
+        expect(constraints.pollInterval).toBe(10);
+        expect(constraints.timeout).toBe(600);
+      });
+
+      it('should have correct status values', () => {
+        const constraints = VIDEO_MODEL_CONSTRAINTS['sora-2'];
+        expect(constraints.statuses).toContain('queued');
+        expect(constraints.statuses).toContain('in_progress');
+        expect(constraints.statuses).toContain('completed');
+        expect(constraints.statuses).toContain('failed');
+      });
+
+      it('should have correct variant values', () => {
+        const constraints = VIDEO_MODEL_CONSTRAINTS['sora-2'];
+        expect(constraints.variants).toContain('video');
+        expect(constraints.variants).toContain('thumbnail');
+        expect(constraints.variants).toContain('spritesheet');
+      });
+
+      it('should indicate support for input_reference', () => {
+        expect(VIDEO_MODEL_CONSTRAINTS['sora-2'].supportsInputReference).toBe(true);
+        expect(VIDEO_MODEL_CONSTRAINTS['sora-2-pro'].supportsInputReference).toBe(true);
+      });
+
+      it('should indicate support for remix', () => {
+        expect(VIDEO_MODEL_CONSTRAINTS['sora-2'].supportsRemix).toBe(true);
+        expect(VIDEO_MODEL_CONSTRAINTS['sora-2-pro'].supportsRemix).toBe(true);
+      });
+
+      it('should have video size limits', () => {
+        const constraints = VIDEO_MODEL_CONSTRAINTS['sora-2'];
+        expect(constraints.videoMaxSize).toBe(100 * 1024 * 1024); // 100MB
+        expect(constraints.imageReferenceMaxSize).toBe(50 * 1024 * 1024); // 50MB
+      });
+
+      it('should have supported image formats for reference', () => {
+        const constraints = VIDEO_MODEL_CONSTRAINTS['sora-2'];
+        expect(constraints.imageReferenceFormats).toContain('image/jpeg');
+        expect(constraints.imageReferenceFormats).toContain('image/png');
+        expect(constraints.imageReferenceFormats).toContain('image/webp');
+      });
+    });
+
+    describe('validateVideoParams', () => {
+      it('should validate sora-2 parameters successfully', () => {
+        const params = {
+          prompt: 'a cat on a motorcycle',
+          size: '1280x720',
+          seconds: 8
+        };
+        const result = validateVideoParams('sora-2', params);
+        expect(result.valid).toBe(true);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it('should validate sora-2-pro parameters successfully', () => {
+        const params = {
+          prompt: 'a landscape',
+          size: '1792x1024',
+          seconds: 12
+        };
+        const result = validateVideoParams('sora-2-pro', params);
+        expect(result.valid).toBe(true);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it('should reject invalid size for sora-2', () => {
+        const params = {
+          prompt: 'a cat',
+          size: '1920x1080'  // Not valid for Sora
+        };
+        const result = validateVideoParams('sora-2', params);
+        expect(result.valid).toBe(false);
+        expect(result.errors[0]).toContain('Invalid size');
+      });
+
+      it('should reject prompt exceeding max length', () => {
+        const longPrompt = 'a'.repeat(10001);
+        const params = {
+          prompt: longPrompt
+        };
+        const result = validateVideoParams('sora-2', params);
+        expect(result.valid).toBe(false);
+        expect(result.errors[0]).toContain('exceeds maximum length');
+      });
+
+      it('should reject invalid duration', () => {
+        const params = {
+          prompt: 'a cat',
+          seconds: 15  // Not valid: must be 4, 8, or 12
+        };
+        const result = validateVideoParams('sora-2', params);
+        expect(result.valid).toBe(false);
+        expect(result.errors[0]).toContain('Invalid duration');
+      });
+
+      it('should accept valid durations (4, 8, 12)', () => {
+        const validDurations = [4, 8, 12];
+
+        validDurations.forEach(seconds => {
+          const result = validateVideoParams('sora-2', {
+            prompt: 'test',
+            seconds
+          });
+          expect(result.valid).toBe(true);
+        });
+      });
+
+      it('should accept valid durations as strings', () => {
+        const result = validateVideoParams('sora-2', {
+          prompt: 'test',
+          seconds: '8'
+        });
+        expect(result.valid).toBe(true);
+      });
+
+      it('should reject invalid variant', () => {
+        const params = {
+          variant: 'invalid'
+        };
+        const result = validateVideoParams('sora-2', params);
+        expect(result.valid).toBe(false);
+        expect(result.errors[0]).toContain('Invalid variant');
+      });
+
+      it('should accept valid variants', () => {
+        const validVariants = ['video', 'thumbnail', 'spritesheet'];
+
+        validVariants.forEach(variant => {
+          const result = validateVideoParams('sora-2', { variant });
+          expect(result.valid).toBe(true);
+        });
+      });
+
+      it('should return error for unknown video model', () => {
+        const result = validateVideoParams('unknown-model', {});
+        expect(result.valid).toBe(false);
+        expect(result.errors[0]).toContain('Unknown video model');
+      });
+
+      it('should validate both sora models have identical constraints', () => {
+        const sora2 = VIDEO_MODEL_CONSTRAINTS['sora-2'];
+        const sora2Pro = VIDEO_MODEL_CONSTRAINTS['sora-2-pro'];
+
+        // Both should have same constraints
+        expect(sora2.sizes).toEqual(sora2Pro.sizes);
+        expect(sora2.seconds).toEqual(sora2Pro.seconds);
+        expect(sora2.promptMaxLength).toBe(sora2Pro.promptMaxLength);
+        expect(sora2.supportsInputReference).toBe(sora2Pro.supportsInputReference);
+        expect(sora2.supportsRemix).toBe(sora2Pro.supportsRemix);
+      });
+    });
+
+    describe('getVideoModelConstraints', () => {
+      it('should return constraints for valid video model', () => {
+        const constraints = getVideoModelConstraints('sora-2');
+        expect(constraints).toBeDefined();
+        expect(constraints.sizes).toBeDefined();
+        expect(constraints.seconds).toBeDefined();
+      });
+
+      it('should return constraints for sora-2-pro', () => {
+        const constraints = getVideoModelConstraints('sora-2-pro');
+        expect(constraints).toBeDefined();
+        expect(constraints.sizes).toBeDefined();
+      });
+
+      it('should return null for invalid model', () => {
+        const constraints = getVideoModelConstraints('invalid-model');
+        expect(constraints).toBeNull();
+      });
+
+      it('should return null for image models', () => {
+        const constraints = getVideoModelConstraints('dall-e-3');
+        expect(constraints).toBeNull();
+      });
     });
   });
 });

@@ -1,31 +1,41 @@
 #!/usr/bin/env node
 
 /**
- * OpenAI Image Generation - Main CLI Script
+ * OpenAI Image & Video Generation - Main CLI Script
  *
  * Command-line tool for generating, editing, and creating variations of images
- * using OpenAI's image generation API (DALL-E 2, DALL-E 3, GPT Image 1).
+ * using OpenAI's image generation API (DALL-E 2, DALL-E 3, GPT Image 1),
+ * and generating videos using Sora (Sora 2, Sora 2 Pro).
  *
- * Usage:
+ * Image Usage:
  *   openai-img --dalle-3 --prompt "a cat" --size 1024x1024
  *   openai-img --gpt-image-1 --prompt "landscape" --background transparent
  *   openai-img --dalle-2 --edit --image photo.png --prompt "add a hat"
  *   openai-img --dalle-2 --variation --image photo.png --n 3
+ *
+ * Video Usage:
+ *   openai-img --video --sora-2 --prompt "a cat on a motorcycle" --seconds 8
+ *   openai-img --video --sora-2-pro --input-image frame.jpg --prompt "she walks away"
+ *   openai-img --remix-video video_123 --prompt "change to teal colors"
+ *   openai-img --list-videos --limit 20
  */
 
 import { Command } from 'commander';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { OpenAIImageAPI } from './api.js';
+import { OpenAIImageAPI, OpenAIVideoAPI } from './api.js';
 import {
   generateTimestampedFilename,
+  generateVideoFilename,
   writeToFile,
   ensureDirectory,
   setLogLevel,
   createSpinner,
-  logger
+  logger,
+  saveVideoFile,
+  saveVideoMetadata
 } from './utils.js';
-import { getOutputDir, getModelConstraints, MODELS } from './config.js';
+import { getOutputDir, getModelConstraints, MODELS, VIDEO_MODELS, getVideoModelConstraints } from './config.js';
 
 // ES module dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -123,6 +133,38 @@ ${'='.repeat(70)}
         --response-format url
 
 ${'='.repeat(70)}
+VIDEO GENERATION (SORA)
+${'='.repeat(70)}
+
+13. Sora 2 - Basic text-to-video
+    $ openai-img --video --sora-2 \\
+        --prompt "a cat riding a motorcycle through the night" \\
+        --seconds 8 \\
+        --size 1280x720
+
+14. Sora 2 Pro - High quality video with reference image
+    $ openai-img --video --sora-2-pro \\
+        --input-image first_frame.jpg \\
+        --prompt "she turns around and smiles, then walks away" \\
+        --seconds 12 \\
+        --size 1792x1024
+
+15. Remix existing video
+    $ openai-img --remix-video video_abc123 \\
+        --prompt "change the color palette to teal and rust"
+
+16. List your video library
+    $ openai-img --list-videos --limit 20 --order desc
+
+17. Delete a video
+    $ openai-img --delete-video video_abc123
+
+18. Download video thumbnail
+    $ openai-img --video --sora-2 \\
+        --prompt "sunset over ocean waves" \\
+        --variant thumbnail
+
+${'='.repeat(70)}
 MODEL COMPARISON
 ${'='.repeat(70)}
 
@@ -144,8 +186,175 @@ GPT Image 1:
   - Advanced: Input fidelity, moderation control, multiple formats
   - Note: Always returns base64-encoded images
 
+Sora 2:
+  - Sizes: 720x1280, 1280x720, 1024x1792, 1792x1024
+  - Duration: 4, 8, or 12 seconds
+  - Features: Fast generation, text-to-video, image-to-video, remix
+  - Use case: Rapid iteration, social content, prototypes
+
+Sora 2 Pro:
+  - Sizes: 720x1280, 1280x720, 1024x1792, 1792x1024
+  - Duration: 4, 8, or 12 seconds
+  - Features: Production quality, text-to-video, image-to-video, remix
+  - Use case: High-resolution cinematic footage, marketing assets
+
 ${'='.repeat(70)}
 `);
+}
+
+/**
+ * Handle video mode operations (Sora).
+ */
+async function handleVideoMode(options) {
+  // Determine video model
+  let model = 'sora-2'; // default
+  if (options.sora2) model = VIDEO_MODELS['sora-2'];
+  if (options.sora2Pro) model = VIDEO_MODELS['sora-2-pro'];
+
+  // Initialize video API
+  const videoApi = new OpenAIVideoAPI({
+    apiKey: options.apiKey,
+    logLevel: options.logLevel
+  });
+
+  // Determine output directory
+  const outputDir = options.outputDir || path.join(getOutputDir(), model);
+  await ensureDirectory(outputDir);
+
+  // Handle list videos
+  if (options.listVideos) {
+    logger.info(`\n${'='.repeat(60)}`);
+    logger.info('Listing videos');
+    logger.info(`${'='.repeat(60)}`);
+
+    const result = await videoApi.listVideos({
+      limit: options.limit || 20,
+      order: options.order || 'desc'
+    });
+
+    if (result.data && result.data.length > 0) {
+      logger.info(`\nFound ${result.data.length} video(s):\n`);
+      result.data.forEach(video => {
+        logger.info(`  ID: ${video.id}`);
+        logger.info(`  Status: ${video.status}`);
+        logger.info(`  Model: ${video.model}`);
+        logger.info(`  Size: ${video.size}`);
+        logger.info(`  Duration: ${video.seconds}s`);
+        logger.info(`  Created: ${new Date(video.created_at * 1000).toISOString()}`);
+        if (video.prompt) logger.info(`  Prompt: "${video.prompt.substring(0, 60)}..."`);
+        logger.info('');
+      });
+    } else {
+      logger.info('\nNo videos found.');
+    }
+    return;
+  }
+
+  // Handle delete video
+  if (options.deleteVideo) {
+    logger.info(`\n${'='.repeat(60)}`);
+    logger.info(`Deleting video: ${options.deleteVideo}`);
+    logger.info(`${'='.repeat(60)}`);
+
+    const result = await videoApi.deleteVideo(options.deleteVideo);
+    logger.info(`\n✓ Video deleted: ${options.deleteVideo}`);
+    return;
+  }
+
+  // Handle remix video
+  if (options.remixVideo) {
+    const videoId = options.remixVideo;
+    const prompt = options.prompt[0];
+
+    if (!prompt) {
+      throw new Error('--prompt is required for remixing video');
+    }
+
+    logger.info(`\n${'='.repeat(60)}`);
+    logger.info(`Remixing video ${videoId}: "${prompt.substring(0, 50)}..."`);
+    logger.info(`${'='.repeat(60)}`);
+
+    // Create remix
+    const remixJob = await videoApi.remixVideo(videoId, prompt);
+
+    // Poll for completion
+    const video = await videoApi.waitForVideo(remixJob.id);
+
+    // Download video content
+    logger.info('Downloading video content...');
+    const buffer = await videoApi.downloadVideoContent(video.id, options.variant || 'video');
+
+    // Save video
+    const filename = generateVideoFilename(prompt, model, 'mp4');
+    const videoPath = path.join(outputDir, filename);
+    await saveVideoFile(buffer, videoPath);
+
+    // Save metadata
+    const metadataPath = videoPath.replace('.mp4', '.json');
+    await saveVideoMetadata(video, metadataPath);
+
+    logger.info(`\n✓ Success! Remixed video saved:`);
+    logger.info(`  - ${videoPath}`);
+    logger.info(`  - ${metadataPath}\n`);
+    return;
+  }
+
+  // Handle create video
+  if (options.prompt.length === 0) {
+    throw new Error('--prompt is required for video generation');
+  }
+
+  const prompt = options.prompt[0];
+
+  logger.info(`\n${'='.repeat(60)}`);
+  logger.info(`Generating video with ${model}: "${prompt.substring(0, 50)}..."`);
+  logger.info(`Output directory: ${outputDir}`);
+  logger.info(`${'='.repeat(60)}`);
+
+  // Build parameters
+  const params = {
+    prompt,
+    model,
+    size: options.size,
+    seconds: options.seconds
+  };
+
+  if (options.inputImage) {
+    params.input_reference = options.inputImage;
+    logger.info(`Using input reference image: ${options.inputImage}`);
+  }
+
+  if (options.dryRun) {
+    logger.info('Dry run - parameters validated successfully:');
+    logger.info(JSON.stringify(params, null, 2));
+    return;
+  }
+
+  // Create video and poll for completion
+  const video = await videoApi.createAndPoll(params);
+
+  // Download video content
+  const variant = options.variant || 'video';
+  logger.info(`Downloading ${variant} content...`);
+  const buffer = await videoApi.downloadVideoContent(video.id, variant);
+
+  // Determine file extension based on variant
+  let extension = 'mp4';
+  if (variant === 'thumbnail') extension = 'webp';
+  if (variant === 'spritesheet') extension = 'jpg';
+
+  // Save video/image
+  const filename = generateVideoFilename(prompt, model, extension);
+  const filePath = path.join(outputDir, filename);
+  await saveVideoFile(buffer, filePath);
+
+  // Save metadata
+  const metadataPath = filePath.replace(`.${extension}`, '.json');
+  await saveVideoMetadata(video, metadataPath);
+
+  logger.info(`\n✓ Success! Video saved:`);
+  logger.info(`  - ${filePath}`);
+  logger.info(`  - ${metadataPath}\n`);
 }
 
 /**
@@ -153,7 +362,7 @@ ${'='.repeat(70)}
  */
 program
   .name('openai-img')
-  .description('OpenAI Image Generation CLI - DALL-E and GPT Image models')
+  .description('OpenAI Image & Video Generation CLI - DALL-E, GPT Image, and Sora models')
   .version('1.0.1');
 
 // Model selection (mutually exclusive)
@@ -162,10 +371,24 @@ program
   .option('--dalle-3', 'Use DALL-E 3 model')
   .option('--gpt-image-1', 'Use GPT Image 1 model');
 
+// Video model selection (mutually exclusive)
+program
+  .option('--sora-2', 'Use Sora 2 model (fast video generation)')
+  .option('--sora-2-pro', 'Use Sora 2 Pro model (high quality video)');
+
 // Operation mode
 program
+  .option('--video', 'Enable video generation mode')
   .option('--edit', 'Edit existing image(s) with prompt')
   .option('--variation', 'Create variations of existing image');
+
+// Video-specific operations
+program
+  .option('--remix-video <video_id>', 'Remix existing video with new prompt')
+  .option('--list-videos', 'List your video library')
+  .option('--delete-video <video_id>', 'Delete a video from storage')
+  .option('--limit <number>', 'Number of videos to list (default: 20)', parseInt)
+  .option('--order <order>', 'Sort order for list (asc or desc, default: desc)');
 
 // Common parameters
 program
@@ -194,6 +417,12 @@ program
   .option('--output-compression <percent>', 'Compression 0-100 (gpt-image-1 only)', parseInt)
   .option('--input-fidelity <level>', 'Input fidelity: high or low (gpt-image-1 edit only)');
 
+// Sora (video) specific
+program
+  .option('--seconds <duration>', 'Video duration in seconds: 4, 8, or 12 (sora only)')
+  .option('--input-image <path>', 'Reference image for first frame (sora only)')
+  .option('--variant <type>', 'Download variant: video, thumbnail, or spritesheet (default: video)');
+
 // API and output configuration
 program
   .option('--api-key <key>', 'OpenAI API key (overrides environment variable)')
@@ -221,6 +450,17 @@ async function main() {
       setLogLevel(options.logLevel);
     }
 
+    // Detect video mode
+    const isVideoMode = options.video || options.sora2 || options.sora2Pro ||
+                        options.remixVideo || options.listVideos || options.deleteVideo;
+
+    if (isVideoMode) {
+      // VIDEO MODE - handle Sora video operations
+      await handleVideoMode(options);
+      return;
+    }
+
+    // IMAGE MODE - handle DALL-E and GPT Image operations
     // Determine model
     let model = 'dall-e-2'; // default
     if (options.dalle2) model = MODELS['dalle-2'];

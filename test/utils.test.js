@@ -4,10 +4,16 @@
  * Tests for utils.js - file I/O, image handling, and helper functions.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
+
+// Mock DNS module before importing utils
+vi.mock('dns/promises', () => ({
+  lookup: vi.fn()
+}));
+
 import {
   ensureDirectory,
   writeToFile,
@@ -17,8 +23,14 @@ import {
   validateImageFile,
   decodeBase64Image,
   validateImageUrl,
-  validateImagePath
+  validateImagePath,
+  pollVideoWithProgress,
+  saveVideoFile,
+  generateVideoFilename,
+  saveVideoMetadata,
+  validateVideoFile
 } from '../utils.js';
+import { lookup } from 'dns/promises';
 
 const TEST_DIR = './test-output';
 
@@ -354,62 +366,114 @@ describe('Utility Functions', () => {
   });
 
   describe('Security: validateImageUrl', () => {
-    it('should accept valid HTTPS URLs', () => {
-      const validUrls = [
-        'https://example.com/image.png',
-        'https://api.example.com/v1/images/123',
-        'https://cdn.example.org/path/to/image.jpg'
-      ];
-
-      validUrls.forEach(url => {
-        expect(() => validateImageUrl(url)).not.toThrow();
-      });
+    beforeEach(() => {
+      vi.clearAllMocks();
     });
 
-    it('should reject HTTP URLs (only HTTPS allowed)', () => {
-      expect(() => validateImageUrl('http://example.com/image.png'))
-        .toThrow('Only HTTPS URLs are allowed');
+    it('should accept valid HTTPS URLs with public IPs', async () => {
+      lookup.mockResolvedValue({ address: '8.8.8.8', family: 4 });
+      await expect(validateImageUrl('https://example.com/image.png')).resolves.toBe('https://example.com/image.png');
+
+      lookup.mockResolvedValue({ address: '1.1.1.1', family: 4 });
+      await expect(validateImageUrl('https://api.example.com/v1/images/123')).resolves.toBe('https://api.example.com/v1/images/123');
     });
 
-    it('should reject localhost URLs', () => {
-      const localhostUrls = [
-        'https://localhost/image.png',
-        'https://127.0.0.1/image.png',
-        'https://[::1]/image.png'
-      ];
-
-      localhostUrls.forEach(url => {
-        expect(() => validateImageUrl(url)).toThrow(/localhost|internal/i);
-      });
+    it('should reject HTTP URLs (only HTTPS allowed)', async () => {
+      await expect(validateImageUrl('http://example.com/image.png'))
+        .rejects.toThrow('Only HTTPS URLs are allowed');
     });
 
-    it('should reject private IP ranges', () => {
-      const privateIps = [
-        'https://10.0.0.1/image.png',
-        'https://172.16.0.1/image.png',
-        'https://192.168.1.1/image.png',
-        'https://169.254.169.254/latest/meta-data'
-      ];
+    it('should reject localhost URLs', async () => {
+      await expect(validateImageUrl('https://localhost/image.png'))
+        .rejects.toThrow(/metadata/i);
 
-      privateIps.forEach(url => {
-        expect(() => validateImageUrl(url)).toThrow(/internal|private|metadata/i);
-      });
+      await expect(validateImageUrl('https://127.0.0.1/image.png'))
+        .rejects.toThrow(/internal|private/i);
+
+      await expect(validateImageUrl('https://[::1]/image.png'))
+        .rejects.toThrow(/internal|private/i);
     });
 
-    it('should reject cloud metadata endpoints', () => {
-      const metadataUrls = [
-        'https://metadata.google.internal/computeMetadata',
-        'https://169.254.169.254/latest/meta-data'
-      ];
+    it('should reject private IP ranges', async () => {
+      await expect(validateImageUrl('https://10.0.0.1/image.png'))
+        .rejects.toThrow(/internal|private/i);
 
-      metadataUrls.forEach(url => {
-        expect(() => validateImageUrl(url)).toThrow(/metadata|internal|private/i);
-      });
+      await expect(validateImageUrl('https://172.16.0.1/image.png'))
+        .rejects.toThrow(/internal|private/i);
+
+      await expect(validateImageUrl('https://192.168.1.1/image.png'))
+        .rejects.toThrow(/internal|private/i);
+
+      await expect(validateImageUrl('https://169.254.169.254/latest/meta-data'))
+        .rejects.toThrow(/internal|private/i);
     });
 
-    it('should reject invalid URLs', () => {
-      expect(() => validateImageUrl('not-a-url')).toThrow('Invalid URL');
-      expect(() => validateImageUrl('ftp://example.com')).toThrow('HTTPS');
+    it('should reject cloud metadata endpoints', async () => {
+      await expect(validateImageUrl('https://metadata.google.internal/computeMetadata'))
+        .rejects.toThrow(/metadata/i);
+
+      await expect(validateImageUrl('https://169.254.169.254/latest/meta-data'))
+        .rejects.toThrow(/internal|private/i);
+    });
+
+    it('should reject invalid URLs', async () => {
+      await expect(validateImageUrl('not-a-url')).rejects.toThrow('Invalid URL');
+      await expect(validateImageUrl('ftp://example.com')).rejects.toThrow('HTTPS');
+    });
+
+    // DNS Rebinding Prevention Tests
+    it('should reject domains resolving to localhost (DNS rebinding prevention)', async () => {
+      lookup.mockResolvedValue({ address: '127.0.0.1', family: 4 });
+      await expect(validateImageUrl('https://evil.com/image.jpg'))
+        .rejects.toThrow('resolves to internal/private IP');
+    });
+
+    it('should reject domains resolving to private IPs (DNS rebinding prevention)', async () => {
+      lookup.mockResolvedValue({ address: '10.0.0.1', family: 4 });
+      await expect(validateImageUrl('https://evil.com/image.jpg'))
+        .rejects.toThrow('resolves to internal/private IP');
+
+      lookup.mockResolvedValue({ address: '192.168.1.1', family: 4 });
+      await expect(validateImageUrl('https://evil2.com/image.jpg'))
+        .rejects.toThrow('resolves to internal/private IP');
+
+      lookup.mockResolvedValue({ address: '172.16.0.1', family: 4 });
+      await expect(validateImageUrl('https://evil3.com/image.jpg'))
+        .rejects.toThrow('resolves to internal/private IP');
+    });
+
+    it('should reject domains resolving to cloud metadata IPs (DNS rebinding prevention)', async () => {
+      lookup.mockResolvedValue({ address: '169.254.169.254', family: 4 });
+      await expect(validateImageUrl('https://evil.com/image.jpg'))
+        .rejects.toThrow('resolves to internal/private IP');
+    });
+
+    it('should reject domains resolving to IPv6 loopback (DNS rebinding prevention)', async () => {
+      lookup.mockResolvedValue({ address: '::1', family: 6 });
+      await expect(validateImageUrl('https://evil.com/image.jpg'))
+        .rejects.toThrow('resolves to internal/private IP');
+    });
+
+    it('should reject domains resolving to IPv6 private addresses (DNS rebinding prevention)', async () => {
+      lookup.mockResolvedValue({ address: 'fe80::1', family: 6 });
+      await expect(validateImageUrl('https://evil.com/image.jpg'))
+        .rejects.toThrow('resolves to internal/private IP');
+
+      lookup.mockResolvedValue({ address: 'fc00::1', family: 6 });
+      await expect(validateImageUrl('https://evil2.com/image.jpg'))
+        .rejects.toThrow('resolves to internal/private IP');
+    });
+
+    it('should handle DNS lookup failures gracefully', async () => {
+      lookup.mockRejectedValue({ code: 'ENOTFOUND' });
+      await expect(validateImageUrl('https://nonexistent.domain.invalid/image.jpg'))
+        .rejects.toThrow('could not be resolved');
+    });
+
+    it('should handle DNS timeout errors gracefully', async () => {
+      lookup.mockRejectedValue(new Error('ETIMEDOUT'));
+      await expect(validateImageUrl('https://timeout.example.com/image.jpg'))
+        .rejects.toThrow('Failed to validate domain');
     });
   });
 
@@ -457,6 +521,302 @@ describe('Utility Functions', () => {
 
       await expect(validateImagePath(testFile))
         .rejects.toThrow('does not appear to be a valid image');
+    });
+  });
+
+  describe('Video Utilities (Sora)', () => {
+    describe('pollVideoWithProgress', () => {
+      it('should poll until video is completed', async () => {
+        const mockApi = {
+          retrieveVideo: vi.fn()
+            .mockResolvedValueOnce({
+              id: 'video_123',
+              status: 'in_progress',
+              progress: 25
+            })
+            .mockResolvedValueOnce({
+              id: 'video_123',
+              status: 'in_progress',
+              progress: 75
+            })
+            .mockResolvedValueOnce({
+              id: 'video_123',
+              status: 'completed',
+              progress: 100
+            })
+        };
+
+        const result = await pollVideoWithProgress(mockApi, 'video_123', {
+          interval: 10,
+          timeout: 5000,
+          showSpinner: false
+        });
+
+        expect(result.status).toBe('completed');
+        expect(mockApi.retrieveVideo).toHaveBeenCalledTimes(3);
+      });
+
+      it('should throw error if video fails', async () => {
+        const mockApi = {
+          retrieveVideo: vi.fn().mockResolvedValue({
+            id: 'video_123',
+            status: 'failed',
+            error: 'Generation failed'
+          })
+        };
+
+        await expect(pollVideoWithProgress(mockApi, 'video_123', {
+          interval: 10,
+          showSpinner: false
+        })).rejects.toThrow('Video generation failed');
+      });
+
+      it('should throw error on timeout', async () => {
+        const mockApi = {
+          retrieveVideo: vi.fn().mockResolvedValue({
+            id: 'video_123',
+            status: 'in_progress',
+            progress: 50
+          })
+        };
+
+        await expect(pollVideoWithProgress(mockApi, 'video_123', {
+          interval: 100,
+          timeout: 200,  // Very short timeout
+          showSpinner: false
+        })).rejects.toThrow('timed out');
+      });
+
+      it('should throw error if video ID is missing', async () => {
+        const mockApi = {
+          retrieveVideo: vi.fn()
+        };
+
+        await expect(pollVideoWithProgress(mockApi, null, { showSpinner: false }))
+          .rejects.toThrow();  // Will throw when trying to access undefined properties
+      });
+    });
+
+    describe('saveVideoFile', () => {
+      it('should save video buffer to file', async () => {
+        const filepath = path.join(TEST_DIR, 'test-video.mp4');
+        const videoBuffer = Buffer.from('fake video data');
+
+        await saveVideoFile(videoBuffer, filepath);
+
+        expect(existsSync(filepath)).toBe(true);
+        const content = await fs.readFile(filepath);
+        expect(content).toEqual(videoBuffer);
+      });
+
+      it('should create parent directories', async () => {
+        const filepath = path.join(TEST_DIR, 'nested', 'video', 'test.mp4');
+        const videoBuffer = Buffer.from('fake video data');
+
+        await saveVideoFile(videoBuffer, filepath);
+
+        expect(existsSync(filepath)).toBe(true);
+      });
+
+      it('should throw error if buffer is not provided', async () => {
+        const filepath = path.join(TEST_DIR, 'test.mp4');
+
+        await expect(saveVideoFile(null, filepath))
+          .rejects.toThrow('Invalid video data: expected Buffer');
+      });
+
+      it('should throw error if filepath is not provided', async () => {
+        const videoBuffer = Buffer.from('fake video data');
+
+        await expect(saveVideoFile(videoBuffer, null))
+          .rejects.toThrow();  // Will throw filesystem error
+      });
+
+      it('should validate buffer is a Buffer instance', async () => {
+        const filepath = path.join(TEST_DIR, 'test.mp4');
+
+        await expect(saveVideoFile('not a buffer', filepath))
+          .rejects.toThrow('Invalid video data: expected Buffer');
+      });
+
+      it('should reject buffer exceeding size limit', async () => {
+        const filepath = path.join(TEST_DIR, 'test.mp4');
+        const largeBuffer = Buffer.alloc(101 * 1024 * 1024); // 101MB
+
+        await expect(saveVideoFile(largeBuffer, filepath, {
+          maxSize: 100 * 1024 * 1024  // 100MB limit
+        })).rejects.toThrow('exceeds maximum');
+      });
+    });
+
+    describe('generateVideoFilename', () => {
+      it('should generate filename with timestamp', () => {
+        const prompt = 'a cat on a motorcycle';
+        const model = 'sora-2';
+        const result = generateVideoFilename(prompt, model);
+
+        expect(result).toContain('sora-2');
+        expect(result).toContain('a_cat_on_a_motorcycle');
+        // Format: YYYY-MM-DD_HH-MM-SS_model_prompt.mp4
+        expect(result).toMatch(/^\d{4}-\d{2}-\d{2}_[\d-]+_sora-2_a_cat_on_a_motorcycle\.mp4$/);
+      });
+
+      it('should use specified extension', () => {
+        const result = generateVideoFilename('test', 'sora-2', 'webm');
+        expect(result).toMatch(/\.webm$/);
+      });
+
+      it('should default to mp4 extension', () => {
+        const result = generateVideoFilename('test', 'sora-2');
+        expect(result).toMatch(/\.mp4$/);
+      });
+
+      it('should sanitize prompt in filename', () => {
+        const result = generateVideoFilename('Test! Video@ #123', 'sora-2');
+        expect(result).toContain('test_video_123');
+      });
+
+      it('should truncate long prompts', () => {
+        const longPrompt = 'a'.repeat(100);
+        const result = generateVideoFilename(longPrompt, 'sora-2');
+
+        // Filename should be reasonable length (not 100+ chars)
+        expect(result.length).toBeLessThan(80);
+      });
+
+      it('should include model name in filename', () => {
+        const result = generateVideoFilename('test', 'sora-2-pro');
+        expect(result).toContain('sora-2-pro');
+      });
+    });
+
+    describe('saveVideoMetadata', () => {
+      it('should save video metadata as JSON', async () => {
+        const filepath = path.join(TEST_DIR, 'metadata.json');
+        const videoObject = {
+          id: 'video_123',
+          object: 'video',
+          created_at: 1234567890,
+          model: 'sora-2',
+          status: 'completed',
+          progress: 100,
+          prompt: 'a cat on a motorcycle'
+        };
+
+        await saveVideoMetadata(videoObject, filepath);
+
+        expect(existsSync(filepath)).toBe(true);
+        const content = await fs.readFile(filepath, 'utf8');
+        const parsed = JSON.parse(content);
+        // The function saves specific fields, not the entire object
+        expect(parsed.id).toBe('video_123');
+        expect(parsed.model).toBe('sora-2');
+        expect(parsed.status).toBe('completed');
+      });
+
+      it('should create parent directories', async () => {
+        const filepath = path.join(TEST_DIR, 'nested', 'metadata.json');
+        const videoObject = { id: 'video_123', status: 'completed' };
+
+        await saveVideoMetadata(videoObject, filepath);
+
+        expect(existsSync(filepath)).toBe(true);
+      });
+
+      it('should format JSON nicely with indentation', async () => {
+        const filepath = path.join(TEST_DIR, 'metadata.json');
+        const videoObject = {
+          id: 'video_123',
+          model: 'sora-2'
+        };
+
+        await saveVideoMetadata(videoObject, filepath);
+
+        const content = await fs.readFile(filepath, 'utf8');
+        expect(content).toContain('\n');  // Should be formatted, not minified
+        expect(content).toContain('  ');  // Should have indentation
+      });
+    });
+
+    describe('validateVideoFile', () => {
+      it('should validate MP4 file magic bytes (ftyp)', async () => {
+        const filepath = path.join(TEST_DIR, 'test.mp4');
+        await ensureDirectory(TEST_DIR);
+
+        // Create file with valid MP4 magic bytes: "ftyp" at offset 4
+        const mp4Header = Buffer.from([
+          0x00, 0x00, 0x00, 0x20,  // Size
+          0x66, 0x74, 0x79, 0x70,  // "ftyp"
+          0x69, 0x73, 0x6F, 0x6D   // "isom"
+        ]);
+        await fs.writeFile(filepath, mp4Header);
+
+        const result = validateVideoFile(Buffer.concat([mp4Header, Buffer.alloc(100)]));
+
+        expect(result.valid).toBe(true);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it('should validate MP4 file magic bytes (mdat)', async () => {
+        // Create file with valid MP4 magic bytes: "mdat" at offset 4
+        const mp4Header = Buffer.from([
+          0x00, 0x00, 0x00, 0x20,  // Size
+          0x6D, 0x64, 0x61, 0x74   // "mdat"
+        ]);
+
+        const result = validateVideoFile(Buffer.concat([mp4Header, Buffer.alloc(100)]));
+
+        expect(result.valid).toBe(true);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it('should reject non-MP4 files', () => {
+        const invalidBuffer = Buffer.from('This is not a video file');
+
+        const result = validateVideoFile(invalidBuffer);
+
+        expect(result.valid).toBe(false);
+        expect(result.errors[0]).toContain('not appear to be a valid MP4');
+      });
+
+      it('should reject empty buffers', () => {
+        const result = validateVideoFile(Buffer.alloc(0));
+
+        expect(result.valid).toBe(false);
+        expect(result.errors[0]).toContain('Video buffer is empty');
+      });
+
+      it('should reject buffers that are too small', () => {
+        const result = validateVideoFile(Buffer.alloc(7)); // Less than 8 bytes
+
+        expect(result.valid).toBe(false);
+        expect(result.errors[0]).toContain('too small to be valid');
+      });
+
+      it('should validate buffer size constraints', () => {
+        const largeBuffer = Buffer.alloc(101 * 1024 * 1024); // 101MB
+
+        const result = validateVideoFile(largeBuffer, {
+          maxSize: 100 * 1024 * 1024  // 100MB limit
+        });
+
+        expect(result.valid).toBe(false);
+        expect(result.errors[0]).toContain('exceeds maximum');
+      });
+
+      it('should accept valid sized buffers', () => {
+        const mp4Header = Buffer.from([
+          0x00, 0x00, 0x00, 0x20,
+          0x66, 0x74, 0x79, 0x70  // "ftyp"
+        ]);
+        const videoBuffer = Buffer.concat([mp4Header, Buffer.alloc(1024)]);
+
+        const result = validateVideoFile(videoBuffer, {
+          maxSize: 10 * 1024 * 1024  // 10MB limit
+        });
+
+        expect(result.valid).toBe(true);
+      });
     });
   });
 });

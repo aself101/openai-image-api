@@ -48,4 +48,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Model comparison table
 - Organization verification requirements for GPT Image 1
 
-[1.0.0]: https://github.com/aself101/img-gen/releases/tag/v1.0.0
+[1.0.0]: https://github.com/aself101/opernai-image-api/releases/tag/v1.0.0

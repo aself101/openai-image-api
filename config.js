@@ -34,18 +34,34 @@ if (existsSync(globalConfigPath)) {
 // OpenAI API Base URL
 export const BASE_URL = 'https://api.openai.com';
 
-// API Endpoints
+// API Endpoints - Images
 export const ENDPOINTS = {
   'generate': '/v1/images/generations',
   'edit': '/v1/images/edits',
   'variation': '/v1/images/variations'
 };
 
-// Supported models
+// API Endpoints - Videos (Sora)
+export const VIDEO_ENDPOINTS = {
+  'create': '/v1/videos',
+  'retrieve': '/v1/videos/{video_id}',
+  'content': '/v1/videos/{video_id}/content',
+  'remix': '/v1/videos/{video_id}/remix',
+  'list': '/v1/videos',
+  'delete': '/v1/videos/{video_id}'
+};
+
+// Supported models - Images
 export const MODELS = {
   'dalle-2': 'dall-e-2',
   'dalle-3': 'dall-e-3',
   'gpt-image-1': 'gpt-image-1'
+};
+
+// Supported models - Videos (Sora)
+export const VIDEO_MODELS = {
+  'sora-2': 'sora-2',
+  'sora-2-pro': 'sora-2-pro'
 };
 
 // Model-specific parameter constraints
@@ -89,6 +105,40 @@ export const MODEL_CONSTRAINTS = {
     imageMaxSize: 50 * 1024 * 1024, // 50MB
     imageFormats: ['png', 'webp', 'jpg'],
     editMaxImages: 16
+  }
+};
+
+// Video model-specific parameter constraints (Sora)
+export const VIDEO_MODEL_CONSTRAINTS = {
+  'sora-2': {
+    sizes: ['720x1280', '1280x720', '1024x1792', '1792x1024'],
+    seconds: [4, 8, 12],
+    quality: ['standard'],
+    promptMaxLength: 10000,
+    pollInterval: 10, // seconds between status checks
+    timeout: 600, // 10 minutes maximum wait time
+    statuses: ['queued', 'in_progress', 'completed', 'failed'],
+    variants: ['video', 'thumbnail', 'spritesheet'],
+    supportsInputReference: true, // Image for first frame
+    supportsRemix: true,
+    videoMaxSize: 100 * 1024 * 1024, // 100MB max download
+    imageReferenceMaxSize: 50 * 1024 * 1024, // 50MB for input_reference
+    imageReferenceFormats: ['image/jpeg', 'image/png', 'image/webp']
+  },
+  'sora-2-pro': {
+    sizes: ['720x1280', '1280x720', '1024x1792', '1792x1024'],
+    seconds: [4, 8, 12],
+    quality: ['standard'],
+    promptMaxLength: 10000,
+    pollInterval: 10, // seconds between status checks
+    timeout: 600, // 10 minutes maximum wait time
+    statuses: ['queued', 'in_progress', 'completed', 'failed'],
+    variants: ['video', 'thumbnail', 'spritesheet'],
+    supportsInputReference: true, // Image for first frame
+    supportsRemix: true,
+    videoMaxSize: 100 * 1024 * 1024, // 100MB max download
+    imageReferenceMaxSize: 50 * 1024 * 1024, // 50MB for input_reference
+    imageReferenceFormats: ['image/jpeg', 'image/png', 'image/webp']
   }
 };
 
@@ -251,4 +301,74 @@ export function validateModelParams(model, params) {
  */
 export function getModelConstraints(model) {
   return MODEL_CONSTRAINTS[model] || null;
+}
+
+/**
+ * Validate parameters for a specific video model.
+ *
+ * @param {string} model - The video model name
+ * @param {Object} params - Parameters to validate
+ * @returns {Object} Validation result { valid: boolean, errors: string[] }
+ */
+export function validateVideoParams(model, params) {
+  const errors = [];
+  const constraints = VIDEO_MODEL_CONSTRAINTS[model];
+
+  if (!constraints) {
+    errors.push(`Unknown video model: ${model}`);
+    return { valid: false, errors };
+  }
+
+  // Validate prompt length
+  if (params.prompt && params.prompt.length > constraints.promptMaxLength) {
+    errors.push(
+      `Prompt exceeds maximum length of ${constraints.promptMaxLength} characters for ${model}`
+    );
+  }
+
+  // Validate size
+  if (params.size && !constraints.sizes.includes(params.size)) {
+    errors.push(
+      `Invalid size "${params.size}" for ${model}. Valid sizes: ${constraints.sizes.join(', ')}`
+    );
+  }
+
+  // Validate seconds (duration)
+  if (params.seconds !== undefined) {
+    const secondsNum = typeof params.seconds === 'string' ? parseInt(params.seconds, 10) : params.seconds;
+    if (!constraints.seconds.includes(secondsNum)) {
+      errors.push(
+        `Invalid duration "${params.seconds}" for ${model}. Valid durations: ${constraints.seconds.join(', ')} seconds`
+      );
+    }
+  }
+
+  // Validate quality
+  if (params.quality && !constraints.quality.includes(params.quality)) {
+    errors.push(
+      `Invalid quality "${params.quality}" for ${model}. Valid options: ${constraints.quality.join(', ')}`
+    );
+  }
+
+  // Validate variant (for content download)
+  if (params.variant && !constraints.variants.includes(params.variant)) {
+    errors.push(
+      `Invalid variant "${params.variant}" for ${model}. Valid variants: ${constraints.variants.join(', ')}`
+    );
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+/**
+ * Get video model constraints for validation and help text.
+ *
+ * @param {string} model - The video model name
+ * @returns {Object|null} Video model constraints or null if model not found
+ */
+export function getVideoModelConstraints(model) {
+  return VIDEO_MODEL_CONSTRAINTS[model] || null;
 }

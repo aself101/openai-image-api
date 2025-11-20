@@ -10,6 +10,8 @@ import { statSync } from 'fs';
 import path from 'path';
 import winston from 'winston';
 import axios from 'axios';
+import { lookup } from 'dns/promises';
+import { isIPv4, isIPv6 } from 'net';
 
 // Configure module logger
 const logger = winston.createLogger({
@@ -37,31 +39,28 @@ export function setLogLevel(level) {
 export { logger };
 
 /**
- * Validate URL for security (prevent SSRF attacks).
+ * Helper function to check if an IP address is blocked (private/internal).
  *
- * @param {string} url - URL to validate
- * @throws {Error} If URL is invalid or points to blocked resource
+ * @param {string} ip - IP address to check (IPv4 or IPv6)
+ * @returns {boolean} True if IP is blocked, false otherwise
  */
-export function validateImageUrl(url) {
-  let parsed;
+function isBlockedIP(ip) {
+  // Remove IPv6 bracket notation
+  const cleanIP = ip.replace(/^\[|\]$/g, '');
 
-  try {
-    parsed = new URL(url);
-  } catch (error) {
-    throw new Error(`Invalid URL: ${url}`);
+  // Block localhost variations
+  if (cleanIP === 'localhost' || cleanIP === '127.0.0.1' || cleanIP === '::1') {
+    return true;
   }
 
-  // Only allow HTTPS (not HTTP)
-  if (parsed.protocol !== 'https:') {
-    throw new Error('Only HTTPS URLs are allowed for security reasons');
-  }
-
-  const hostname = parsed.hostname.toLowerCase();
-
-  // Block localhost variations (including IPv6 bracket notation)
-  const cleanHostname = hostname.replace(/^\[|\]$/g, ''); // Remove IPv6 brackets
-  if (cleanHostname === 'localhost' || cleanHostname === '127.0.0.1' || cleanHostname === '::1') {
-    throw new Error('Access to localhost is not allowed');
+  // Block cloud metadata endpoints
+  const blockedHosts = [
+    'metadata.google.internal',
+    'metadata',
+    '169.254.169.254',
+  ];
+  if (blockedHosts.includes(cleanIP)) {
+    return true;
   }
 
   // Block private IP ranges and special addresses
@@ -78,19 +77,74 @@ export function validateImageUrl(url) {
     /^fd00:/,                    // IPv6 unique local
   ];
 
-  // Block cloud metadata endpoints
-  const blockedHosts = [
-    'metadata.google.internal',  // GCP metadata
-    'metadata',                  // Generic metadata
-    '169.254.169.254',          // AWS/Azure metadata IP
-  ];
+  return blockedPatterns.some(pattern => pattern.test(cleanIP));
+}
 
-  if (blockedHosts.includes(hostname)) {
+/**
+ * Validate URL for security (prevent SSRF attacks).
+ *
+ * DNS Resolution: This function performs DNS resolution to prevent DNS rebinding attacks,
+ * where a domain might resolve to different IPs between validation time and request time.
+ *
+ * @param {string} url - URL to validate
+ * @returns {Promise<string>} The validated URL
+ * @throws {Error} If URL is invalid or points to blocked resource
+ */
+export async function validateImageUrl(url) {
+  let parsed;
+
+  try {
+    parsed = new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL: ${url}`);
+  }
+
+  // Only allow HTTPS (not HTTP)
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Only HTTPS URLs are allowed for security reasons');
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  const cleanHostname = hostname.replace(/^\[|\]$/g, ''); // Remove IPv6 brackets
+
+  // First check if hostname itself is blocked (before DNS resolution)
+  const blockedHosts = ['localhost', 'metadata.google.internal', 'metadata'];
+  if (blockedHosts.includes(cleanHostname)) {
+    logger.warn(`SECURITY: Blocked access to prohibited hostname: ${hostname}`);
     throw new Error('Access to cloud metadata endpoints is not allowed');
   }
 
-  if (blockedPatterns.some(pattern => pattern.test(hostname))) {
-    throw new Error('Access to internal/private IP addresses is not allowed');
+  // Check if hostname is already an IP address (not a domain name)
+  if (isIPv4(cleanHostname) || isIPv6(cleanHostname)) {
+    if (isBlockedIP(cleanHostname)) {
+      logger.warn(`SECURITY: Blocked access to private/internal IP: ${hostname}`);
+      throw new Error('Access to internal/private IP addresses is not allowed');
+    }
+  } else {
+    // Hostname is a domain name - perform DNS resolution to prevent DNS rebinding
+    try {
+      logger.debug(`Resolving DNS for hostname: ${hostname}`);
+      const { address } = await lookup(hostname);
+      logger.debug(`DNS resolved ${hostname} → ${address}`);
+
+      if (isBlockedIP(address)) {
+        logger.warn(`SECURITY: DNS resolution of ${hostname} points to blocked IP: ${address}`);
+        throw new Error(`Domain ${hostname} resolves to internal/private IP address`);
+      }
+
+      logger.debug(`DNS validation passed for ${hostname} (resolved to ${address})`);
+    } catch (error) {
+      if (error.code === 'ENOTFOUND') {
+        logger.warn(`SECURITY: Domain ${hostname} could not be resolved`);
+        throw new Error(`Domain ${hostname} could not be resolved`);
+      } else if (error.message && error.message.includes('resolves to internal')) {
+        // Re-throw our custom error about blocked IPs
+        throw error;
+      } else {
+        logger.warn(`SECURITY: DNS lookup failed for ${hostname}: ${error.message}`);
+        throw new Error(`Failed to validate domain ${hostname}: ${error.message}`);
+      }
+    }
   }
 
   return url;
@@ -206,7 +260,7 @@ export async function imageToBase64(input) {
     // Check if input is a URL
     if (input.startsWith('http://') || input.startsWith('https://')) {
       // Validate URL for security
-      validateImageUrl(input);
+      await validateImageUrl(input);
 
       logger.debug(`Fetching image from URL: ${input}`);
       const response = await axios.get(input, { responseType: 'arraybuffer' });
@@ -253,7 +307,7 @@ export async function imageToBase64(input) {
 export async function downloadImage(url, filepath) {
   try {
     // Validate URL for security
-    validateImageUrl(url);
+    await validateImageUrl(url);
 
     logger.debug(`Downloading image from ${url} to ${filepath}`);
 
@@ -459,4 +513,241 @@ export function createSpinner(message = 'Processing') {
   };
 
   return spinner;
+}
+
+// ============================================================================
+// VIDEO-SPECIFIC UTILITIES (Sora)
+// ============================================================================
+
+/**
+ * Poll video status with progress display.
+ *
+ * @param {Object} api - OpenAIVideoAPI instance
+ * @param {string} videoId - Video job ID
+ * @param {Object} options - Polling options
+ * @param {number} options.interval - Polling interval in milliseconds (default: 10000)
+ * @param {number} options.timeout - Maximum wait time in milliseconds (default: 600000)
+ * @param {boolean} options.showSpinner - Whether to show spinner (default: true)
+ * @param {AbortSignal} options.signal - Optional AbortSignal for cancellation
+ * @returns {Promise<Object>} Completed video object
+ * @throws {Error} If video generation fails, times out, or is cancelled
+ */
+export async function pollVideoWithProgress(api, videoId, options = {}) {
+  const {
+    interval = 10000, // 10 seconds
+    timeout = 600000, // 10 minutes
+    showSpinner = true,
+    signal
+  } = options;
+
+  const startTime = Date.now();
+  let spinner = null;
+
+  if (showSpinner) {
+    spinner = createSpinner('Generating video');
+    spinner.start();
+  }
+
+  try {
+    while (true) {
+      // Check if operation was cancelled
+      if (signal?.aborted) {
+        if (spinner) spinner.fail('Video generation cancelled');
+        throw new Error('Video generation was cancelled');
+      }
+
+      // Check timeout
+      const elapsed = Date.now() - startTime;
+      if (elapsed > timeout) {
+        if (spinner) spinner.fail('Video generation timed out');
+        throw new Error(`Video generation timed out after ${timeout / 1000}s`);
+      }
+
+      // Retrieve video status (pass signal for cancellable requests)
+      const video = await api.retrieveVideo(videoId, { signal });
+
+      // Update spinner with progress
+      if (spinner && video.progress !== undefined) {
+        const progressPercent = video.progress || 0;
+        const elapsedSec = Math.floor(elapsed / 1000);
+
+        // Estimate remaining time based on progress
+        let estimatedMsg = '';
+        if (progressPercent > 0 && progressPercent < 100) {
+          const estimatedTotal = (elapsed / progressPercent) * 100;
+          const estimatedRemaining = Math.floor((estimatedTotal - elapsed) / 1000);
+          estimatedMsg = ` - ${estimatedRemaining}s remaining`;
+        }
+
+        const statusText = video.status === 'queued' ? 'Queued' :
+                          video.status === 'in_progress' ? 'Processing' : video.status;
+        spinner.update(`${statusText} (${progressPercent}% complete, ${elapsedSec}s elapsed${estimatedMsg})`);
+      }
+
+      // Check if completed
+      if (video.status === 'completed') {
+        if (spinner) spinner.stop('Video generation completed');
+        return video;
+      }
+
+      // Check if failed
+      if (video.status === 'failed') {
+        if (spinner) spinner.fail('Video generation failed');
+        const errorMsg = video.error?.message || 'Video generation failed';
+        throw new Error(errorMsg);
+      }
+
+      // Wait before next poll
+      await pause(interval / 1000);
+    }
+  } catch (error) {
+    if (spinner && interval) spinner.fail(error.message);
+    throw error;
+  }
+}
+
+/**
+ * Save video buffer to MP4 file.
+ *
+ * @param {Buffer} buffer - Video data buffer
+ * @param {string} filepath - Destination file path
+ * @param {Object} options - Save options
+ * @param {number} options.maxSize - Maximum allowed file size in bytes (default: 100MB)
+ * @returns {Promise<string>} Path to saved file
+ * @throws {Error} If buffer is invalid or exceeds size limit
+ */
+export async function saveVideoFile(buffer, filepath, options = {}) {
+  const { maxSize = 100 * 1024 * 1024 } = options; // 100MB default
+
+  if (!Buffer.isBuffer(buffer)) {
+    throw new Error('Invalid video data: expected Buffer');
+  }
+
+  if (buffer.length === 0) {
+    throw new Error('Video buffer is empty');
+  }
+
+  if (buffer.length > maxSize) {
+    const maxMB = (maxSize / (1024 * 1024)).toFixed(1);
+    const actualMB = (buffer.length / (1024 * 1024)).toFixed(1);
+    throw new Error(
+      `Video file size (${actualMB}MB) exceeds maximum (${maxMB}MB)`
+    );
+  }
+
+  try {
+    logger.debug(`Saving video file to ${filepath}`);
+
+    const dir = path.dirname(filepath);
+    await ensureDirectory(dir);
+
+    await fs.writeFile(filepath, buffer);
+    logger.info(`Saved video: ${filepath} (${(buffer.length / (1024 * 1024)).toFixed(2)}MB)`);
+
+    return filepath;
+  } catch (error) {
+    logger.error(`Error saving video file: ${error.message}`);
+    throw new Error(`Failed to save video file: ${error.message}`);
+  }
+}
+
+/**
+ * Generate timestamped filename for video.
+ *
+ * @param {string} prompt - The video generation prompt
+ * @param {string} model - Model name (sora-2, sora-2-pro)
+ * @param {string} extension - File extension (mp4, webp, jpg)
+ * @returns {string} Timestamped filename
+ */
+export function generateVideoFilename(prompt, model, extension = 'mp4') {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0] + '_' +
+                    new Date().toISOString().replace(/[:.]/g, '-').split('T')[1].substring(0, 8);
+  const promptPart = promptToFilename(prompt, 40);
+  return `${timestamp}_${model}_${promptPart}.${extension}`;
+}
+
+/**
+ * Save video metadata as JSON file.
+ *
+ * @param {Object} videoObject - Video object from API
+ * @param {string} filepath - Path to save metadata JSON
+ * @returns {Promise<string>} Path to saved metadata file
+ */
+export async function saveVideoMetadata(videoObject, filepath) {
+  try {
+    logger.debug(`Saving video metadata to ${filepath}`);
+
+    const metadata = {
+      id: videoObject.id,
+      object: videoObject.object,
+      created_at: videoObject.created_at,
+      status: videoObject.status,
+      model: videoObject.model,
+      progress: videoObject.progress,
+      seconds: videoObject.seconds,
+      size: videoObject.size,
+      prompt: videoObject.prompt,
+      remixed_from_video_id: videoObject.remixed_from_video_id,
+      error: videoObject.error,
+      timestamp: new Date().toISOString()
+    };
+
+    await writeToFile(metadata, filepath, 'json');
+    logger.info(`Saved video metadata: ${filepath}`);
+
+    return filepath;
+  } catch (error) {
+    logger.error(`Error saving video metadata: ${error.message}`);
+    throw new Error(`Failed to save video metadata: ${error.message}`);
+  }
+}
+
+/**
+ * Validate video file from download.
+ *
+ * @param {Buffer} buffer - Video buffer to validate
+ * @param {Object} constraints - Validation constraints
+ * @returns {Object} Validation result { valid: boolean, errors: string[] }
+ */
+export function validateVideoFile(buffer, constraints = {}) {
+  const errors = [];
+
+  if (!Buffer.isBuffer(buffer)) {
+    errors.push('Invalid video data: expected Buffer');
+    return { valid: false, errors };
+  }
+
+  if (buffer.length === 0) {
+    errors.push('Video buffer is empty');
+    return { valid: false, errors };
+  }
+
+  // Check file size
+  if (constraints.maxSize && buffer.length > constraints.maxSize) {
+    const maxMB = (constraints.maxSize / (1024 * 1024)).toFixed(1);
+    const actualMB = (buffer.length / (1024 * 1024)).toFixed(1);
+    errors.push(
+      `Video file size (${actualMB}MB) exceeds maximum (${maxMB}MB)`
+    );
+  }
+
+  // Check MP4 magic bytes
+  // MP4 files start with various signatures:
+  // - ftyp box: 0x00 0x00 0x00 [size] 'ftyp'
+  // Common MP4 variants at bytes 4-7: 'ftyp', 'mdat', 'moov', 'wide'
+  if (buffer.length >= 8) {
+    const signature = buffer.slice(4, 8).toString();
+    const validSignatures = ['ftyp', 'mdat', 'moov', 'wide', 'free', 'skip'];
+
+    if (!validSignatures.includes(signature)) {
+      errors.push('File does not appear to be a valid MP4 video');
+    }
+  } else {
+    errors.push('Video file is too small to be valid');
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
 }

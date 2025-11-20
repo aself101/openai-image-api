@@ -1,7 +1,7 @@
 {
   "name": "openai-image-api",
   "version": "1.0.1",
-  "description": "OpenAI Image Generation API wrapper - DALL-E and GPT Image models for Node.js with CLI",
+  "description": "OpenAI Image & Video Generation API wrapper - DALL-E, GPT Image, and Sora models for Node.js with CLI",
   "main": "api.js",
   "type": "module",
   "bin": {
@@ -10,11 +10,13 @@
   "exports": {
     ".": "./api.js",
     "./api": "./api.js",
+    "./video-api": "./video-api.js",
     "./utils": "./utils.js",
     "./config": "./config.js"
   },
   "files": [
     "api.js",
+    "video-api.js",
     "cli.js",
     "utils.js",
     "config.js",
@@ -28,6 +30,9 @@
     "openai:dalle2": "node cli.js --dalle-2",
     "openai:dalle3": "node cli.js --dalle-3",
     "openai:gpt-image": "node cli.js --gpt-image-1",
+    "openai:sora-2": "node cli.js --video --sora-2",
+    "openai:sora-2-pro": "node cli.js --video --sora-2-pro",
+    "openai:list-videos": "node cli.js --list-videos",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:ui": "vitest --ui",
@@ -39,11 +44,19 @@
     "dall-e-2",
     "dall-e-3",
     "gpt-image-1",
+    "sora",
+    "sora-2",
+    "sora-2-pro",
     "image-generation",
+    "video-generation",
     "ai-image",
+    "ai-video",
     "text-to-image",
+    "text-to-video",
+    "image-to-video",
     "image-edit",
     "image-variation",
+    "video-remix",
     "cli"
   ],
   "author": "img-gen Contributors",
@@ -71,8 +84,8 @@
     "@semantic-release/git": "^10.0.1",
     "@semantic-release/github": "^11.0.6",
     "@semantic-release/npm": "^12.0.2",
-    "@vitest/coverage-v8": "^4.0.9",
+    "@vitest/coverage-v8": "^4.0.10",
     "semantic-release": "^24.2.9",
-    "vitest": "^4.0.9"
+    "vitest": "^4.0.10"
   }
 }

@@ -1,11 +1,11 @@
-# OpenAI Image Generation Service
+# OpenAI Image & Video Generation Service
 
 [![npm version](https://img.shields.io/npm/v/openai-image-api.svg)](https://www.npmjs.com/package/openai-image-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/openai-image-api)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-244%20passing-brightgreen)](test/)
 
-A Node.js wrapper for the [OpenAI Image Generation API](https://platform.openai.com/docs/api-reference/images) that provides easy access to DALL-E 2, DALL-E 3, and GPT Image 1 models. Generate, edit, and create variations of AI images with a simple command-line interface.
+A Node.js wrapper for the [OpenAI Image Generation API](https://platform.openai.com/docs/api-reference/images) and [OpenAI Video Generation API](https://platform.openai.com/docs/api-reference/video) that provides easy access to DALL-E 2, DALL-E 3, GPT Image 1, and Sora models. Generate, edit, and create variations of AI images, plus generate and remix AI videos with a simple command-line interface.
 
 This service follows the data-collection architecture pattern with organized data storage, comprehensive logging, parameter validation, and CLI orchestration.
 
@@ -20,22 +20,38 @@ export OPENAI_API_KEY="your-api-key-here"
 
 # Generate an image
 openai-img --dalle-3 --prompt "a serene mountain landscape"
+
+# Generate a video
+openai-img --video --sora-2 --prompt "a cat sitting on a windowsill watching the rain" --seconds 4
 ```
 
 ### Programmatic Usage
 ```javascript
 import { OpenAIImageAPI } from 'openai-image-api';
+import { OpenAIVideoAPI } from 'openai-image-api/video';
 
-const api = new OpenAIImageAPI();
+const imageApi = new OpenAIImageAPI();
 
 // Generate an image with DALL-E 3
-const result = await api.generateDallE3({
+const imageResult = await imageApi.generateDallE3({
   prompt: 'a serene mountain landscape',
   quality: 'hd',
   size: '1792x1024'
 });
 
-console.log('Image URL:', result.data[0].url);
+console.log('Image URL:', imageResult.data[0].url);
+
+// Generate a video with Sora
+const videoApi = new OpenAIVideoAPI();
+const videoResult = await videoApi.createVideo({
+  prompt: 'a cat sitting on a windowsill watching the rain',
+  model: 'sora-2',
+  seconds: '4'
+});
+
+// Wait for completion and download
+const completedVideo = await videoApi.waitForVideo(videoResult.id);
+console.log('Video ready:', completedVideo);
 ```
 
 ## Table of Contents
@@ -53,17 +69,19 @@ console.log('Image URL:', result.data[0].url);
 
 ## Overview
 
-The OpenAI Image Generation API provides access to state-of-the-art image generation models. This Node.js service implements:
+The OpenAI Image and Video Generation APIs provide access to state-of-the-art AI generation models. This Node.js service implements:
 
-- **3 Generation Models** - DALL-E 2, DALL-E 3, GPT Image 1
-- **3 Operation Modes** - Generate, Edit, Variation
+- **5 Generation Models** - DALL-E 2, DALL-E 3, GPT Image 1, Sora 2, Sora 2 Pro
+- **Image Operations** - Generate, Edit, Variation
+- **Video Operations** - Create (text-to-video), Create (image-to-video), List, Retrieve, Delete, Remix
 - **Parameter Validation** - Pre-flight validation catches invalid parameters before API calls
 - **Security Hardened** - SSRF protection, input validation, rate limiting, log sanitization
 - **API Key Authentication** - Simple Bearer token authentication
 - **Batch Processing** - Generate multiple images sequentially from multiple prompts
+- **Async Video Polling** - Automatic progress tracking with spinner UI and cancellation support
 - **Organized Storage** - Structured directories with timestamped files and metadata
 - **CLI Orchestration** - Command-line tool for easy batch generation
-- **Comprehensive Testing** - 128 tests with Vitest for reliability
+- **Comprehensive Testing** - 244 tests with Vitest for reliability
 
 ## Models
 
@@ -116,6 +134,34 @@ Advanced image generation with transparency, multi-image editing, and compressio
 **Features:** Transparent backgrounds, multi-image editing, compression, moderation control
 
 **⚠️ IMPORTANT:** GPT Image 1 requires a verified organization. See [Organization Verification](#organization-verification) below.
+
+### Sora 2
+
+AI video generation with text-to-video and image-to-video capabilities.
+
+**Best for:** Creating short video clips from text descriptions or reference images
+
+**Parameters:**
+- `prompt` - Text description of desired video (required)
+- `size` - Video dimensions (1280x720, 1920x1080, 1080x1920)
+- `seconds` - Video duration: "4", "8", or "12" seconds
+- `input_reference` - Optional reference image for image-to-video generation (PNG, JPEG, WebP)
+
+**Features:** Text-to-video, image-to-video, video remixing, async polling with progress tracking
+
+### Sora 2 Pro
+
+Advanced video generation with enhanced quality and longer durations.
+
+**Best for:** Higher quality video generation with extended length options
+
+**Parameters:**
+- `prompt` - Text description of desired video (required)
+- `size` - Video dimensions (1280x720, 1920x1080, 1080x1920)
+- `seconds` - Video duration: "4", "8", or "12" seconds
+- `input_reference` - Optional reference image for image-to-video generation (PNG, JPEG, WebP)
+
+**Features:** Enhanced quality, text-to-video, image-to-video, video remixing
 
 ## Authentication Setup
 
@@ -304,22 +350,39 @@ npm run openai -- [model] [options]
 
 Choose one model:
 
+**Image Models:**
 ```bash
 --dalle-2          # DALL-E 2 - Basic generation
 --dalle-3          # DALL-E 3 - High quality
 --gpt-image-1      # GPT Image 1 - Advanced features
 ```
 
+**Video Models:**
+```bash
+--video --sora-2       # Sora 2 - Video generation
+--video --sora-2-pro   # Sora 2 Pro - Enhanced video quality
+```
+
 ### Operation Mode
 
+**Image Operations:**
 ```bash
 # Default: generate new image
 --edit             # Edit existing image(s)
 --variation        # Create variations of image
 ```
 
+**Video Operations:**
+```bash
+--video            # Enable video mode (required for video generation)
+--list-videos      # List all videos
+--delete-video <id> # Delete a video by ID
+--remix-video <id>  # Remix an existing video
+```
+
 ### Common Options
 
+**Image Options:**
 ```bash
 --prompt <text>                # Prompt (can specify multiple for batch)
 --image <path>                 # Input image (required for edit/variation)
@@ -332,6 +395,19 @@ Choose one model:
 --log-level <level>            # DEBUG, INFO, WARNING, ERROR
 --dry-run                      # Preview without API call
 --examples                     # Show usage examples
+```
+
+**Video Options:**
+```bash
+--prompt <text>                # Video description (required for generation)
+--input-reference <path>       # Reference image for image-to-video
+--size <dimensions>            # Video dimensions (1280x720, 1920x1080, 1080x1920)
+--seconds <duration>           # Video duration ("4", "8", or "12")
+--list-videos                  # List all videos
+--delete-video <id>            # Delete a video by ID
+--remix-video <id>             # Remix an existing video with new prompt
+--output-dir <path>            # Custom output directory
+--log-level <level>            # DEBUG, INFO, WARNING, ERROR
 ```
 
 ### DALL-E 3 Specific
@@ -354,8 +430,14 @@ Choose one model:
 ### Utility Commands
 
 ```bash
+# General
 npm run openai:help            # Show help
 npm run openai:examples        # Show usage examples
+
+# Video-specific
+npm run openai:sora-2          # Quick Sora 2 generation
+npm run openai:sora-2-pro      # Quick Sora 2 Pro generation
+npm run openai:list-videos     # List all videos
 ```
 
 ## API Methods
@@ -418,6 +500,109 @@ const savedPaths = await api.saveImages(
   'my-image',
   'png'
 );
+```
+
+### Video Generation Methods
+
+#### `createVideo(params)`
+
+Generate video from text prompt or reference image.
+
+```javascript
+import { OpenAIVideoAPI } from './video-api.js';
+
+const api = new OpenAIVideoAPI();
+
+// Text-to-video
+const videoJob = await api.createVideo({
+  prompt: 'a cat sitting on a windowsill watching the rain',
+  model: 'sora-2',
+  size: '1280x720',
+  seconds: '4'
+});
+
+// Image-to-video
+const videoFromImage = await api.createVideo({
+  prompt: 'animate this scene with gentle movement',
+  model: 'sora-2',
+  input_reference: './reference.png',
+  seconds: '8'
+});
+```
+
+#### `retrieveVideo(videoId)`
+
+Get the status and details of a video generation job.
+
+```javascript
+const video = await api.retrieveVideo('video_abc123');
+console.log('Status:', video.status);
+console.log('Progress:', video.progress);
+```
+
+#### `waitForVideo(videoId, options)`
+
+Poll for video completion with automatic progress tracking.
+
+```javascript
+// Basic usage with spinner
+const completedVideo = await api.waitForVideo('video_abc123');
+
+// With custom options
+const video = await api.waitForVideo('video_abc123', {
+  interval: 5000,    // Poll every 5 seconds
+  timeout: 600000,   // 10 minute timeout
+  showSpinner: true  // Show progress spinner
+});
+
+// With cancellation support
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 30000); // Cancel after 30s
+
+try {
+  const video = await api.waitForVideo('video_abc123', {
+    signal: controller.signal
+  });
+} catch (error) {
+  if (error.message.includes('cancelled')) {
+    console.log('Video generation was cancelled');
+  }
+}
+```
+
+#### `listVideos(options)`
+
+List all video generation jobs.
+
+```javascript
+const videos = await api.listVideos({ limit: 10 });
+videos.data.forEach(video => {
+  console.log(`${video.id}: ${video.status} (${video.progress}%)`);
+});
+```
+
+#### `deleteVideo(videoId)`
+
+Delete a video generation job.
+
+```javascript
+await api.deleteVideo('video_abc123');
+console.log('Video deleted');
+```
+
+#### `remixVideo(videoId, newPrompt, model)`
+
+Remix an existing video with a new prompt.
+
+```javascript
+const remixedJob = await api.remixVideo(
+  'video_abc123',
+  'make it more dramatic with lightning',
+  'sora-2'
+);
+
+const remixed = await api.waitForVideo(remixedJob.id);
+console.log('Remixed video ready:', remixed);
 ```
 
 ## Examples
@@ -513,9 +698,77 @@ const savedPaths = await api.saveImages(
 console.log('Generated images:', savedPaths);
 ```
 
+### Example 8: Basic Video Generation with Sora 2
+
+```bash
+npm run openai -- --video --sora-2 \
+  --prompt "a cat sitting on a windowsill watching the rain" \
+  --seconds 4 \
+  --size 1280x720
+```
+
+### Example 9: Image-to-Video with Reference Image
+
+```bash
+npm run openai -- --video --sora-2 \
+  --prompt "animate this scene with gentle waves" \
+  --input-reference beach-photo.jpg \
+  --seconds 8 \
+  --size 1920x1080
+```
+
+### Example 10: High-Quality Video with Sora 2 Pro
+
+```bash
+npm run openai -- --video --sora-2-pro \
+  --prompt "cinematic aerial view of mountains at sunrise" \
+  --seconds 12 \
+  --size 1920x1080
+```
+
+### Example 11: List and Manage Videos
+
+```bash
+# List all videos
+npm run openai:list-videos
+
+# Delete a specific video
+npm run openai -- --delete-video video_abc123
+
+# Remix an existing video
+npm run openai -- --video --sora-2 \
+  --remix-video video_abc123 \
+  --prompt "add dramatic lightning effects"
+```
+
+### Example 12: Using Video API in Code
+
+```javascript
+import { OpenAIVideoAPI } from './video-api.js';
+
+const api = new OpenAIVideoAPI();
+
+// Create video
+const videoJob = await api.createVideo({
+  prompt: 'a serene mountain lake at dawn',
+  model: 'sora-2',
+  size: '1920x1080',
+  seconds: '8'
+});
+
+console.log('Video job created:', videoJob.id);
+
+// Wait for completion with progress tracking
+const completedVideo = await api.waitForVideo(videoJob.id);
+
+console.log('Video ready!');
+console.log('Download URL:', completedVideo.download_url);
+console.log('Duration:', completedVideo.seconds, 'seconds');
+```
+
 ## Data Organization
 
-Generated images and metadata are organized by model:
+Generated images/videos and metadata are organized by model:
 
 ```
 datasets/
@@ -526,11 +779,17 @@ datasets/
     │   └── ...
     ├── dalle-3/
     │   └── ...
-    └── gpt-image-1/
+    ├── gpt-image-1/
+    │   └── ...
+    ├── sora-2/
+    │   ├── 2025-11-20_04-28-05_sora-2_a_cat_sitting_on_a_windowsill_watching_t.mp4
+    │   ├── 2025-11-20_04-28-05_sora-2_a_cat_sitting_on_a_windowsill_watching_t.json
+    │   └── ...
+    └── sora-2-pro/
         └── ...
 ```
 
-**Metadata Format:**
+**Image Metadata Format:**
 
 ```json
 {
@@ -550,6 +809,25 @@ datasets/
       "total_tokens": 100
     }
   }
+}
+```
+
+**Video Metadata Format:**
+
+```json
+{
+  "id": "video_abc123",
+  "object": "video",
+  "created_at": 1763612808,
+  "status": "completed",
+  "model": "sora-2",
+  "progress": 100,
+  "seconds": "4",
+  "size": "1280x720",
+  "prompt": "a cat sitting on a windowsill watching the rain",
+  "remixed_from_video_id": null,
+  "error": null,
+  "timestamp": "2025-11-20T04:28:05.911Z"
 }
 ```
 
@@ -575,7 +853,9 @@ npm run test:coverage
 
 ### Test Coverage
 
-The test suite includes 128 tests covering:
+The test suite includes 244 tests covering:
+
+**Image API (128 tests):**
 - API authentication and key validation
 - All three generation methods (generate, edit, variation)
 - All three models (DALL-E 2, DALL-E 3, GPT Image 1)
@@ -583,6 +863,16 @@ The test suite includes 128 tests covering:
 - Error handling scenarios
 - Utility functions (file I/O, image conversion, filename generation)
 - Configuration management
+
+**Video API (116 tests):**
+- Video creation (text-to-video, image-to-video)
+- Video retrieval and polling with progress tracking
+- Video listing, deletion, and remixing
+- Request cancellation with AbortController
+- Parameter validation for Sora models
+- Error handling and retry logic
+- Security features (HTTPS enforcement, API key redaction)
+- Utility functions (polling, file I/O, metadata storage)
 
 ## Error Handling
 
@@ -678,6 +968,7 @@ See [Organization Verification](#organization-verification) for more details.
 
 ## Development Scripts
 
+**Image Generation:**
 ```bash
 npm run openai              # Run CLI
 npm run openai:help         # Show help
@@ -687,13 +978,23 @@ npm run openai:dalle3       # Use DALL-E 3
 npm run openai:gpt-image    # Use GPT Image 1
 ```
 
+**Video Generation:**
+```bash
+npm run openai:sora-2       # Use Sora 2
+npm run openai:sora-2-pro   # Use Sora 2 Pro
+npm run openai:list-videos  # List all videos
+```
+
 Pass additional flags with `--`:
 
 ```bash
 npm run openai:dalle3 -- --prompt "a cat" --quality hd
+npm run openai:sora-2 -- --prompt "a cat on a windowsill" --seconds 4
 ```
 
 ## Model Comparison
+
+### Image Models
 
 | Feature | DALL-E 2 | DALL-E 3 | GPT Image 1 |
 |---------|----------|----------|-------------|
@@ -708,16 +1009,34 @@ npm run openai:dalle3 -- --prompt "a cat" --quality hd
 | Compression Control | ✗ | ✗ | ✓ |
 | Output Formats | PNG | PNG | PNG/JPEG/WebP |
 
+### Video Models
+
+| Feature | Sora 2 | Sora 2 Pro |
+|---------|--------|------------|
+| Text-to-Video | ✓ | ✓ |
+| Image-to-Video | ✓ | ✓ |
+| Video Remixing | ✓ | ✓ |
+| Max Duration | 12s | 12s |
+| Resolutions | 720p, 1080p, portrait | 720p, 1080p, portrait |
+| Quality | Standard | Enhanced |
+| Async Processing | ✓ | ✓ |
+| Progress Tracking | ✓ | ✓ |
+| Cancellation | ✓ | ✓ |
+
 ## Additional Resources
 
-- [OpenAI API Documentation](https://platform.openai.com/docs/api-reference/images)
+- [OpenAI Image API Documentation](https://platform.openai.com/docs/api-reference/images)
+- [OpenAI Video API Documentation](https://platform.openai.com/docs/api-reference/video)
 - [OpenAI Platform](https://platform.openai.com/)
 - [Image Generation Guide](https://platform.openai.com/docs/guides/images)
 
 ## Related Packages
 
-- [`bfl-api`](https://github.com/aself101/bfl-api) – FLUX & Kontext
-- [`stability-ai-api`](https://github.com/aself101/stability-ai-api) – Stable Diffusion 3.5 + upscalers
+This package is part of the img-gen ecosystem. Check out these other AI generation services:
+
+- [`bfl-api`](https://github.com/aself101/bfl-api) - Black Forest Labs API wrapper for FLUX and Kontext models
+- [`stability-ai-api`](https://github.com/aself101/stability-ai-api) - Stability AI API wrapper for Stable Diffusion 3.5 and image upscaling
+- [`google-genai-api`](https://github.com/aself101/google-genai-api) - Google Generative AI (Imagen) wrapper
 
 ---
 
@@ -729,4 +1048,8 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ---
 
-**Note:** This service implements all three image generation endpoints (create, edit, variation) with comprehensive parameter validation and error handling.
+**Note:** This service implements:
+- **Image Generation**: All three endpoints (create, edit, variation) for DALL-E 2, DALL-E 3, and GPT Image 1
+- **Video Generation**: Complete Sora API integration with text-to-video, image-to-video, remixing, and async polling
+- **Security**: Comprehensive SSRF protection, input validation, API key redaction, and error sanitization
+- **Reliability**: 244 comprehensive tests, parameter validation, and automatic retry with exponential backoff

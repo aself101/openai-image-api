@@ -494,3 +494,6 @@ export class OpenAIImageAPI {
     return savedPaths;
   }
 }
+
+// Export video API class for clean separation
+export { OpenAIVideoAPI } from './video-api.js';
