@@ -1,3 +1,11 @@
+## [1.1.1](https://github.com/aself101/openai-image-api/compare/v1.1.0...v1.1.1) (2025-11-20)
+
+
+### Bug Fixes
+
+* version update ([230009e](https://github.com/aself101/openai-image-api/commit/230009e4eae7423468ce0909a154ff35a5a1180d))
+* version update ([d1ed904](https://github.com/aself101/openai-image-api/commit/d1ed90416d66411431cac8eea7150de9d5db8092))
+
 # [1.1.0](https://github.com/aself101/openai-image-api/compare/v1.0.1...v1.1.0) (2025-11-20)
 
 
