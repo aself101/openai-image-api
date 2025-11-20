@@ -363,7 +363,7 @@ async function handleVideoMode(options) {
 program
   .name('openai-img')
   .description('OpenAI Image & Video Generation CLI - DALL-E, GPT Image, and Sora models')
-  .version('1.1.1');
+  .version('1.1.2');
 
 // Model selection (mutually exclusive)
 program
@@ -442,6 +442,12 @@ async function main() {
     // Show examples if requested
     if (options.examples) {
       showExamples();
+      process.exit(0);
+    }
+
+    // Show help if no arguments provided
+    if (!process.argv.slice(2).length) {
+      program.outputHelp();
       process.exit(0);
     }
 

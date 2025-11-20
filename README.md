@@ -75,7 +75,7 @@ The OpenAI Image and Video Generation APIs provide access to state-of-the-art AI
 - **Image Operations** - Generate, Edit, Variation
 - **Video Operations** - Create (text-to-video), Create (image-to-video), List, Retrieve, Delete, Remix
 - **Parameter Validation** - Pre-flight validation catches invalid parameters before API calls
-- **Security Hardened** - SSRF protection, input validation, rate limiting, log sanitization
+- **Security Hardened** - SSRF protection with DNS rebinding prevention, input validation, rate limiting, log sanitization
 - **API Key Authentication** - Simple Bearer token authentication
 - **Batch Processing** - Generate multiple images sequentially from multiple prompts
 - **Async Video Polling** - Automatic progress tracking with spinner UI and cancellation support
