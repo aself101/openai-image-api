@@ -363,7 +363,7 @@ async function handleVideoMode(options) {
 program
   .name('openai-img')
   .description('OpenAI Image & Video Generation CLI - DALL-E, GPT Image, and Sora models')
-  .version('1.0.1');
+  .version('1.1.1');
 
 // Model selection (mutually exclusive)
 program
@@ -452,7 +452,7 @@ async function main() {
 
     // Detect video mode
     const isVideoMode = options.video || options.sora2 || options.sora2Pro ||
-                        options.remixVideo || options.listVideos || options.deleteVideo;
+      options.remixVideo || options.listVideos || options.deleteVideo;
 
     if (isVideoMode) {
       // VIDEO MODE - handle Sora video operations
