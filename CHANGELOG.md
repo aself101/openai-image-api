@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/aself101/openai-image-api/compare/v1.0.1...v1.1.0) (2025-11-20)
+
+
+### Features
+
+* add comprehensive video API documentation and validate with live testing ([ffe0b11](https://github.com/aself101/openai-image-api/commit/ffe0b111ae7ca74c1af9b903aff07233f602790f))
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
