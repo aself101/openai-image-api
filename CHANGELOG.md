@@ -1,3 +1,10 @@
+## [1.1.2](https://github.com/aself101/openai-image-api/compare/v1.1.1...v1.1.2) (2025-11-20)
+
+
+### Bug Fixes
+
+* **security:** update documentation for DNS rebinding prevention ([baa61ae](https://github.com/aself101/openai-image-api/commit/baa61aec7e8b228170ea241094666adcf9545423))
+
 ## [1.1.1](https://github.com/aself101/openai-image-api/compare/v1.1.0...v1.1.1) (2025-11-20)
 
 
