@@ -23,6 +23,7 @@
 import { Command } from 'commander';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { readFileSync } from 'fs';
 import { OpenAIImageAPI, OpenAIVideoAPI } from './api.js';
 import {
   generateTimestampedFilename,
@@ -35,11 +36,16 @@ import {
   saveVideoFile,
   saveVideoMetadata
 } from './utils.js';
-import { getOutputDir, getModelConstraints, MODELS, VIDEO_MODELS, getVideoModelConstraints } from './config.js';
+import { getOutputDir, getModelConstraints, MODELS, VIDEO_MODELS } from './config.js';
 
 // ES module dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Read version from package.json dynamically
+const { version } = JSON.parse(
+  readFileSync(path.join(__dirname, 'package.json'), 'utf8')
+);
 
 const program = new Command();
 
@@ -363,7 +369,7 @@ async function handleVideoMode(options) {
 program
   .name('openai-img')
   .description('OpenAI Image & Video Generation CLI - DALL-E, GPT Image, and Sora models')
-  .version('1.1.2');
+  .version(version);
 
 // Model selection (mutually exclusive)
 program

@@ -28,7 +28,7 @@ openai-img --video --sora-2 --prompt "a cat sitting on a windowsill watching the
 ### Programmatic Usage
 ```javascript
 import { OpenAIImageAPI } from 'openai-image-api';
-import { OpenAIVideoAPI } from 'openai-image-api/video';
+import { OpenAIVideoAPI } from 'openai-image-api/video-api';
 
 const imageApi = new OpenAIImageAPI();
 
@@ -1034,6 +1034,7 @@ npm run openai:sora-2 -- --prompt "a cat on a windowsill" --seconds 4
 
 This package is part of the img-gen ecosystem. Check out these other AI generation services:
 
+- [`ideogram-api`](https://github.com/aself101/ideogram-api) - Ideogram API wrapper for image generation, editing, remixing, and manipulation
 - [`bfl-api`](https://github.com/aself101/bfl-api) - Black Forest Labs API wrapper for FLUX and Kontext models
 - [`stability-ai-api`](https://github.com/aself101/stability-ai-api) - Stability AI API wrapper for Stable Diffusion 3.5 and image upscaling
 - [`google-genai-api`](https://github.com/aself101/google-genai-api) - Google Generative AI (Imagen) wrapper
