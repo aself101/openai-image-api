@@ -1,3 +1,10 @@
+## [1.1.3](https://github.com/aself101/openai-image-api/compare/v1.1.2...v1.1.3) (2025-11-21)
+
+
+### Bug Fixes
+
+* **cli:** read version dynamically from package.json ([5474bc7](https://github.com/aself101/openai-image-api/commit/5474bc7ee5fe24027368f41b49fed963942cc9ff))
+
 ## [1.1.2](https://github.com/aself101/openai-image-api/compare/v1.1.1...v1.1.2) (2025-11-20)
 
 
