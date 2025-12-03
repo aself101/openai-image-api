@@ -1,3 +1,19 @@
+# [2.0.0](https://github.com/aself101/openai-image-api/compare/v1.1.3...v2.0.0) (2025-12-03)
+
+
+### Code Refactoring
+
+* **typescript:** migrate entire codebase from JavaScript to TypeScript ([7d7ce46](https://github.com/aself101/openai-image-api/commit/7d7ce461332c8b50e71d774b2fcb75ac5669f847))
+
+
+### BREAKING CHANGES
+
+* **typescript:** Import paths changed from root to dist/
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
 ## [1.1.3](https://github.com/aself101/openai-image-api/compare/v1.1.2...v1.1.3) (2025-11-21)
 
 
