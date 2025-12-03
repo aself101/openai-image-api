@@ -52,8 +52,7 @@ tmp/
 temp/
 *.tmp
 
-# Build outputs (if applicable in future)
-dist/
+# Build outputs
 build/
 
 # Vitest
