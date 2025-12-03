@@ -58,3 +58,6 @@ build/
 
 # Vitest
 .vitest/
+
+# TypeScript
+*.tsbuildinfo

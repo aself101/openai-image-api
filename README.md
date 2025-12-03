@@ -3,11 +3,11 @@
 [![npm version](https://img.shields.io/npm/v/openai-image-api.svg)](https://www.npmjs.com/package/openai-image-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/openai-image-api)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-244%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-199%20passing-brightgreen)](test/)
 
 A Node.js wrapper for the [OpenAI Image Generation API](https://platform.openai.com/docs/api-reference/images) and [OpenAI Video Generation API](https://platform.openai.com/docs/api-reference/video) that provides easy access to DALL-E 2, DALL-E 3, GPT Image 1, and Sora models. Generate, edit, and create variations of AI images, plus generate and remix AI videos with a simple command-line interface.
 
-This service follows the data-collection architecture pattern with organized data storage, comprehensive logging, parameter validation, and CLI orchestration.
+This service follows the data-collection architecture pattern with organized data storage, comprehensive logging, parameter validation, and CLI orchestration. Written in **TypeScript** with full type definitions included.
 
 ## Quick Start
 
@@ -26,15 +26,16 @@ openai-img --video --sora-2 --prompt "a cat sitting on a windowsill watching the
 ```
 
 ### Programmatic Usage
-```javascript
+```typescript
 import { OpenAIImageAPI } from 'openai-image-api';
 import { OpenAIVideoAPI } from 'openai-image-api/video-api';
 
 const imageApi = new OpenAIImageAPI();
 
 // Generate an image with DALL-E 3
-const imageResult = await imageApi.generateDallE3({
+const imageResult = await imageApi.generateImage({
   prompt: 'a serene mountain landscape',
+  model: 'dall-e-3',
   quality: 'hd',
   size: '1792x1024'
 });
@@ -49,9 +50,12 @@ const videoResult = await videoApi.createVideo({
   seconds: '4'
 });
 
-// Wait for completion and download
+// Wait for completion
 const completedVideo = await videoApi.waitForVideo(videoResult.id);
-console.log('Video ready:', completedVideo);
+
+// Download the video content
+const videoBuffer = await videoApi.downloadVideoContent(completedVideo.id);
+console.log('Video downloaded:', videoBuffer.length, 'bytes');
 ```
 
 ## Table of Contents
@@ -60,6 +64,7 @@ console.log('Video ready:', completedVideo);
 - [Models](#models)
 - [Authentication Setup](#authentication-setup)
 - [Installation](#installation)
+- [TypeScript Support](#typescript-support)
 - [CLI Usage](#cli-usage)
 - [API Methods](#api-methods)
 - [Examples](#examples)
@@ -81,7 +86,7 @@ The OpenAI Image and Video Generation APIs provide access to state-of-the-art AI
 - **Async Video Polling** - Automatic progress tracking with spinner UI and cancellation support
 - **Organized Storage** - Structured directories with timestamped files and metadata
 - **CLI Orchestration** - Command-line tool for easy batch generation
-- **Comprehensive Testing** - 244 tests with Vitest for reliability
+- **Comprehensive Testing** - 199 tests with Vitest for reliability
 
 ## Models
 
@@ -258,6 +263,64 @@ Dependencies:
 - `dotenv` - Environment variable management
 - `form-data` - Multipart form data for file uploads
 - `winston` - Logging framework
+- `typescript` - TypeScript compiler (dev dependency)
+
+## TypeScript Support
+
+This package is written in TypeScript and includes full type definitions. All types are exported for use in your TypeScript projects.
+
+### Importing Types
+
+```typescript
+import {
+  OpenAIImageAPI,
+  // Type definitions
+  type GenerateImageParams,
+  type EditImageParams,
+  type VariationImageParams,
+  type ImageResponse,
+  type ImageModel,
+  type APIOptions
+} from 'openai-image-api';
+
+import {
+  OpenAIVideoAPI,
+  type CreateVideoParams,
+  type VideoObject,
+  type ListVideosResponse,
+  type VideoModel,
+  type PollVideoOptions
+} from 'openai-image-api/video-api';
+```
+
+### Project Structure
+
+```
+openai-api/
+├── src/                    # TypeScript source files
+│   ├── api.ts              # Image API class
+│   ├── video-api.ts        # Video API class
+│   ├── config.ts           # Configuration & validation
+│   ├── utils.ts            # Utility functions
+│   ├── cli.ts              # CLI entry point
+│   └── types.ts            # Type definitions
+├── dist/                   # Compiled JavaScript (generated)
+├── test/                   # Test files (TypeScript)
+└── tsconfig.json           # TypeScript configuration
+```
+
+### Building from Source
+
+```bash
+# Install dependencies
+npm install
+
+# Build TypeScript to JavaScript
+npm run build
+
+# Watch mode for development
+npm run build:watch
+```
 
 ## Quick Start
 
@@ -309,12 +372,12 @@ openai-img --dalle-3 \
 
 ### Using the API Class Directly
 
-```javascript
+```typescript
 // If installed via npm
 import { OpenAIImageAPI } from 'openai-image-api';
 
 // If running from source
-import { OpenAIImageAPI } from './api.js';
+import { OpenAIImageAPI } from './dist/api.js';
 
 // Initialize the API
 const api = new OpenAIImageAPI();
@@ -448,8 +511,8 @@ npm run openai:list-videos     # List all videos
 
 Generate image from text prompt.
 
-```javascript
-import { OpenAIImageAPI } from './api.js';
+```typescript
+import { OpenAIImageAPI } from 'openai-image-api';
 
 const api = new OpenAIImageAPI();
 
@@ -508,8 +571,8 @@ const savedPaths = await api.saveImages(
 
 Generate video from text prompt or reference image.
 
-```javascript
-import { OpenAIVideoAPI } from './video-api.js';
+```typescript
+import { OpenAIVideoAPI } from 'openai-image-api/video-api';
 
 const api = new OpenAIVideoAPI();
 
@@ -594,7 +657,7 @@ console.log('Video deleted');
 
 Remix an existing video with a new prompt.
 
-```javascript
+```typescript
 const remixedJob = await api.remixVideo(
   'video_abc123',
   'make it more dramatic with lightning',
@@ -603,6 +666,58 @@ const remixedJob = await api.remixVideo(
 
 const remixed = await api.waitForVideo(remixedJob.id);
 console.log('Remixed video ready:', remixed);
+```
+
+#### `downloadVideoContent(videoId, variant?)`
+
+Download video content as a Buffer.
+
+**Parameters:**
+- `videoId` - Video ID to download (required)
+- `variant` - Content variant: `'video'`, `'thumbnail'`, or `'spritesheet'` (default: `'video'`)
+
+**Returns:** `Promise<Buffer>` containing video/image data
+
+```typescript
+import { writeFile } from 'fs/promises';
+
+const completedVideo = await api.waitForVideo('video_abc123');
+
+// Download the video
+const videoBuffer = await api.downloadVideoContent(completedVideo.id);
+await writeFile('output.mp4', videoBuffer);
+
+// Or download thumbnail
+const thumbnail = await api.downloadVideoContent(completedVideo.id, 'thumbnail');
+await writeFile('thumbnail.jpg', thumbnail);
+
+// Or download spritesheet
+const spritesheet = await api.downloadVideoContent(completedVideo.id, 'spritesheet');
+await writeFile('spritesheet.jpg', spritesheet);
+```
+
+#### `createAndPoll(params, pollOptions?)`
+
+Create video and automatically poll for completion. Convenience method that combines `createVideo()` and `waitForVideo()`.
+
+**Parameters:**
+- `params` - Same as `createVideo()` parameters
+- `pollOptions` - Same as `waitForVideo()` options (interval, timeout, showSpinner)
+
+**Returns:** `Promise<VideoObject>` - Completed video object
+
+```typescript
+// Create and wait in one call
+const completedVideo = await api.createAndPoll({
+  prompt: 'a serene mountain lake at dawn',
+  model: 'sora-2',
+  seconds: '8'
+}, {
+  showSpinner: true  // Show progress spinner
+});
+
+// Video is ready, download it
+const buffer = await api.downloadVideoContent(completedVideo.id);
 ```
 
 ## Examples
@@ -669,12 +784,8 @@ npm run openai -- --dalle-3 \
 
 ### Example 7: Using API Class in Code
 
-```javascript
-// If installed via npm
+```typescript
 import { OpenAIImageAPI } from 'openai-image-api';
-
-// If running from source
-// import { OpenAIImageAPI } from './api.js';
 
 const api = new OpenAIImageAPI();
 
@@ -743,8 +854,9 @@ npm run openai -- --video --sora-2 \
 
 ### Example 12: Using Video API in Code
 
-```javascript
-import { OpenAIVideoAPI } from './video-api.js';
+```typescript
+import { OpenAIVideoAPI } from 'openai-image-api/video-api';
+import { writeFile } from 'fs/promises';
 
 const api = new OpenAIVideoAPI();
 
@@ -762,8 +874,14 @@ console.log('Video job created:', videoJob.id);
 const completedVideo = await api.waitForVideo(videoJob.id);
 
 console.log('Video ready!');
-console.log('Download URL:', completedVideo.download_url);
+console.log('Video ID:', completedVideo.id);
+console.log('Status:', completedVideo.status);
 console.log('Duration:', completedVideo.seconds, 'seconds');
+
+// Download the video content
+const videoBuffer = await api.downloadVideoContent(completedVideo.id);
+await writeFile('output.mp4', videoBuffer);
+console.log('Video saved:', videoBuffer.length, 'bytes');
 ```
 
 ## Data Organization
@@ -853,7 +971,7 @@ npm run test:coverage
 
 ### Test Coverage
 
-The test suite includes 244 tests covering:
+The test suite includes 199 tests covering:
 
 **Image API (128 tests):**
 - API authentication and key validation
@@ -1053,4 +1171,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - **Image Generation**: All three endpoints (create, edit, variation) for DALL-E 2, DALL-E 3, and GPT Image 1
 - **Video Generation**: Complete Sora API integration with text-to-video, image-to-video, remixing, and async polling
 - **Security**: Comprehensive SSRF protection, input validation, API key redaction, and error sanitization
-- **Reliability**: 244 comprehensive tests, parameter validation, and automatic retry with exponential backoff
+- **Reliability**: 199 comprehensive tests, parameter validation, and automatic retry with exponential backoff

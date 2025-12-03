@@ -1,23 +1,30 @@
+# Source files (only dist/ should be published)
+src/
+*.ts
+!*.d.ts
+
 # Test files
 test/
+*.test.ts
 *.test.js
 coverage/
 .nyc_output/
 
-
+# Config files
 tsconfig.json
+tsconfig.test.json
+vitest.config.ts
 jest.config.js
-.releaserc.json
 .eslintrc.js
 .prettierrc
+.releaserc.json
 
 # Development files
 .env
 .env.*
 .env.example
-vitest.config.js
 
-# Output directories
+# Output directories (generated data)
 datasets/
 test-output/
 test-api-output/
@@ -42,14 +49,8 @@ Thumbs.db
 .gitignore
 .github/
 
-# IDE
-.vscode/
-
 # Documentation (keep README.md, LICENSE, CHANGELOG.md)
 docs/
 
-# Build artifacts
+# Dependencies (npm install will handle this)
 node_modules/
-
-# release
-.releaserc.json

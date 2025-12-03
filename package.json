@@ -1,38 +1,57 @@
 {
   "name": "openai-image-api",
-  "version": "1.1.2",
+  "version": "2.0.0",
   "description": "OpenAI Image & Video Generation API wrapper - DALL-E, GPT Image, and Sora models for Node.js with CLI",
-  "main": "api.js",
+  "main": "dist/api.js",
+  "types": "dist/api.d.ts",
   "type": "module",
   "bin": {
-    "openai-img": "cli.js"
+    "openai-img": "dist/cli.js"
   },
   "exports": {
-    ".": "./api.js",
-    "./api": "./api.js",
-    "./video-api": "./video-api.js",
-    "./utils": "./utils.js",
-    "./config": "./config.js"
+    ".": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./video-api": {
+      "types": "./dist/video-api.d.ts",
+      "import": "./dist/video-api.js"
+    },
+    "./utils": {
+      "types": "./dist/utils.d.ts",
+      "import": "./dist/utils.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    }
   },
   "files": [
-    "api.js",
-    "video-api.js",
-    "cli.js",
-    "utils.js",
-    "config.js",
+    "dist",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "openai": "node cli.js",
-    "openai:help": "node cli.js --help",
-    "openai:examples": "node cli.js --examples",
-    "openai:dalle2": "node cli.js --dalle-2",
-    "openai:dalle3": "node cli.js --dalle-3",
-    "openai:gpt-image": "node cli.js --gpt-image-1",
-    "openai:sora-2": "node cli.js --video --sora-2",
-    "openai:sora-2-pro": "node cli.js --video --sora-2-pro",
-    "openai:list-videos": "node cli.js --list-videos",
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "openai": "node dist/cli.js",
+    "openai:help": "node dist/cli.js --help",
+    "openai:examples": "node dist/cli.js --examples",
+    "openai:dalle2": "node dist/cli.js --dalle-2",
+    "openai:dalle3": "node dist/cli.js --dalle-3",
+    "openai:gpt-image": "node dist/cli.js --gpt-image-1",
+    "openai:sora-2": "node dist/cli.js --video --sora-2",
+    "openai:sora-2-pro": "node dist/cli.js --video --sora-2-pro",
+    "openai:list-videos": "node dist/cli.js --list-videos",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:ui": "vitest --ui",
@@ -57,7 +76,8 @@
     "image-edit",
     "image-variation",
     "video-remix",
-    "cli"
+    "cli",
+    "typescript"
   ],
   "author": "img-gen Contributors",
   "license": "MIT",
@@ -84,8 +104,10 @@
     "@semantic-release/git": "^10.0.1",
     "@semantic-release/github": "^11.0.6",
     "@semantic-release/npm": "^12.0.2",
+    "@types/node": "^24.10.1",
     "@vitest/coverage-v8": "^4.0.10",
     "semantic-release": "^24.2.9",
+    "typescript": "^5.9.3",
     "vitest": "^4.0.10"
   }
 }
