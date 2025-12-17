@@ -1,3 +1,10 @@
+# [2.1.0](https://github.com/aself101/openai-image-api/compare/v2.0.0...v2.1.0) (2025-12-17)
+
+
+### Features
+
+* add GPT Image 1.5 model with partial image streaming ([4465bb3](https://github.com/aself101/openai-image-api/commit/4465bb3a793e32aac78a8183c4675226a594c172))
+
 # [2.0.0](https://github.com/aself101/openai-image-api/compare/v1.1.3...v2.0.0) (2025-12-03)
 
 

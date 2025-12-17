@@ -1,6 +1,6 @@
 {
   "name": "openai-image-api",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "OpenAI Image & Video Generation API wrapper - DALL-E, GPT Image, and Sora models for Node.js with CLI",
   "main": "dist/api.js",
   "types": "dist/api.d.ts",
