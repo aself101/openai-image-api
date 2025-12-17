@@ -1,3 +1,10 @@
+## [2.1.1](https://github.com/aself101/openai-image-api/compare/v2.1.0...v2.1.1) (2025-12-17)
+
+
+### Bug Fixes
+
+* **security:** add path traversal validation for --output-dir ([458ea6e](https://github.com/aself101/openai-image-api/commit/458ea6e757a6ce6c3482f0c5ac51c44a0e27b18b))
+
 # [2.1.0](https://github.com/aself101/openai-image-api/compare/v2.0.0...v2.1.0) (2025-12-17)
 
 
