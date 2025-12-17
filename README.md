@@ -3,11 +3,11 @@
 [![npm version](https://img.shields.io/npm/v/openai-image-api.svg)](https://www.npmjs.com/package/openai-image-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/openai-image-api)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-199%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-201%20passing-brightgreen)](test/)
 
-A Node.js wrapper for the [OpenAI Image Generation API](https://platform.openai.com/docs/api-reference/images) and [OpenAI Video Generation API](https://platform.openai.com/docs/api-reference/video) that provides easy access to DALL-E 2, DALL-E 3, GPT Image 1, and Sora models. Generate, edit, and create variations of AI images, plus generate and remix AI videos with a simple command-line interface.
+A Node.js wrapper for the [OpenAI Image Generation API](https://platform.openai.com/docs/api-reference/images) and [OpenAI Video Generation API](https://platform.openai.com/docs/api-reference/video). Supports DALL-E 2, DALL-E 3, GPT Image 1, and Sora models. Generate, edit, and create variations of images, plus generate and remix videos via CLI or programmatic API.
 
-This service follows the data-collection architecture pattern with organized data storage, comprehensive logging, parameter validation, and CLI orchestration. Written in **TypeScript** with full type definitions included.
+This service follows the data-collection architecture pattern with organized data storage, logging, parameter validation, and CLI orchestration. Written in **TypeScript** with full type definitions included.
 
 ## Quick Start
 
@@ -74,27 +74,25 @@ console.log('Video downloaded:', videoBuffer.length, 'bytes');
 
 ## Overview
 
-The OpenAI Image and Video Generation APIs provide access to state-of-the-art AI generation models. This Node.js service implements:
+This Node.js service implements:
 
-- **5 Generation Models** - DALL-E 2, DALL-E 3, GPT Image 1, Sora 2, Sora 2 Pro
+- **6 Generation Models** - DALL-E 2, DALL-E 3, GPT Image 1, GPT Image 1.5, Sora 2, Sora 2 Pro
 - **Image Operations** - Generate, Edit, Variation
 - **Video Operations** - Create (text-to-video), Create (image-to-video), List, Retrieve, Delete, Remix
 - **Parameter Validation** - Pre-flight validation catches invalid parameters before API calls
-- **Security Hardened** - SSRF protection with DNS rebinding prevention, input validation, rate limiting, log sanitization
+- **Security** - SSRF protection with DNS rebinding prevention, input validation, rate limiting, log sanitization
 - **API Key Authentication** - Simple Bearer token authentication
 - **Batch Processing** - Generate multiple images sequentially from multiple prompts
 - **Async Video Polling** - Automatic progress tracking with spinner UI and cancellation support
 - **Organized Storage** - Structured directories with timestamped files and metadata
-- **CLI Orchestration** - Command-line tool for easy batch generation
-- **Comprehensive Testing** - 199 tests with Vitest for reliability
+- **CLI Orchestration** - Command-line tool for batch generation
+- **Testing** - 201 tests with Vitest
 
 ## Models
 
 ### DALL-E 2
 
-Basic image generation with multiple size options and variations support.
-
-**Best for:** Cost-effective generation, creating variations, simple edits
+Image generation with multiple size options. Supports editing and variations.
 
 **Parameters:**
 - `prompt` - Text description of desired image (required for generation)
@@ -107,9 +105,7 @@ Basic image generation with multiple size options and variations support.
 
 ### DALL-E 3
 
-High-quality image generation with HD support and style control.
-
-**Best for:** Professional quality, detailed images, specific styles
+Image generation with HD support and style control.
 
 **Parameters:**
 - `prompt` - Text description of desired image (required)
@@ -122,9 +118,7 @@ High-quality image generation with HD support and style control.
 
 ### GPT Image 1
 
-Advanced image generation with transparency, multi-image editing, and compression control.
-
-**Best for:** Transparent backgrounds, multi-image edits, advanced control
+Image generation with transparency, multi-image editing, and compression control.
 
 **Parameters:**
 - `prompt` - Text description of desired image (required)
@@ -140,11 +134,28 @@ Advanced image generation with transparency, multi-image editing, and compressio
 
 **⚠️ IMPORTANT:** GPT Image 1 requires a verified organization. See [Organization Verification](#organization-verification) below.
 
+### GPT Image 1.5
+
+Same capabilities as GPT Image 1, plus partial image streaming support.
+
+**Parameters:**
+- `prompt` - Text description of desired image (required)
+- `size` - Image dimensions (1024x1024, 1536x1024, 1024x1536, auto)
+- `n` - Number of images to generate (1-10)
+- `format` - Output format (png, jpeg, webp)
+- `compression` - Compression quality (0-100, for JPEG/WebP)
+- `transparency` - Enable transparent backgrounds (boolean)
+- `images` - Multiple input images for editing (array)
+- `moderation` - Content moderation control
+- `partial_images` - Number of partial images to return during generation (0-3)
+
+**Features:** All GPT Image 1 features, plus partial image streaming
+
+**⚠️ IMPORTANT:** GPT Image 1.5 requires a verified organization. See [Organization Verification](#organization-verification) below.
+
 ### Sora 2
 
-AI video generation with text-to-video and image-to-video capabilities.
-
-**Best for:** Creating short video clips from text descriptions or reference images
+Video generation with text-to-video and image-to-video capabilities.
 
 **Parameters:**
 - `prompt` - Text description of desired video (required)
@@ -156,9 +167,7 @@ AI video generation with text-to-video and image-to-video capabilities.
 
 ### Sora 2 Pro
 
-Advanced video generation with enhanced quality and longer durations.
-
-**Best for:** Higher quality video generation with extended length options
+Video generation with higher quality output.
 
 **Parameters:**
 - `prompt` - Text description of desired video (required)
@@ -415,15 +424,16 @@ Choose one model:
 
 **Image Models:**
 ```bash
---dalle-2          # DALL-E 2 - Basic generation
---dalle-3          # DALL-E 3 - High quality
---gpt-image-1      # GPT Image 1 - Advanced features
+--dalle-2          # DALL-E 2
+--dalle-3          # DALL-E 3
+--gpt-image-1      # GPT Image 1
+--gpt-image-15     # GPT Image 1.5 (adds partial image streaming)
 ```
 
 **Video Models:**
 ```bash
---video --sora-2       # Sora 2 - Video generation
---video --sora-2-pro   # Sora 2 Pro - Enhanced video quality
+--video --sora-2       # Sora 2
+--video --sora-2-pro   # Sora 2 Pro
 ```
 
 ### Operation Mode
@@ -971,7 +981,7 @@ npm run test:coverage
 
 ### Test Coverage
 
-The test suite includes 199 tests covering:
+The test suite includes 201 tests covering:
 
 **Image API (128 tests):**
 - API authentication and key validation
@@ -993,8 +1003,6 @@ The test suite includes 199 tests covering:
 - Utility functions (polling, file I/O, metadata storage)
 
 ## Error Handling
-
-The service includes comprehensive error handling:
 
 ### Common Errors
 
@@ -1114,18 +1122,19 @@ npm run openai:sora-2 -- --prompt "a cat on a windowsill" --seconds 4
 
 ### Image Models
 
-| Feature | DALL-E 2 | DALL-E 3 | GPT Image 1 |
-|---------|----------|----------|-------------|
-| Text-to-Image | ✓ | ✓ | ✓ |
-| Image Editing | ✓ | ✗ | ✓ |
-| Image Variations | ✓ | ✗ | ✗ |
-| Max Images (n) | 10 | 1 | 10 |
-| HD Quality | ✗ | ✓ | ✓ |
-| Styles | ✗ | vivid/natural | ✗ |
-| Transparent BG | ✗ | ✗ | ✓ |
-| Multi-image Edit | ✗ | ✗ | ✓ (16 images) |
-| Compression Control | ✗ | ✗ | ✓ |
-| Output Formats | PNG | PNG | PNG/JPEG/WebP |
+| Feature | DALL-E 2 | DALL-E 3 | GPT Image 1 | GPT Image 1.5 |
+|---------|----------|----------|-------------|---------------|
+| Text-to-Image | ✓ | ✓ | ✓ | ✓ |
+| Image Editing | ✓ | ✗ | ✓ | ✓ |
+| Image Variations | ✓ | ✗ | ✗ | ✗ |
+| Max Images (n) | 10 | 1 | 10 | 10 |
+| HD Quality | ✗ | ✓ | ✓ | ✓ |
+| Styles | ✗ | vivid/natural | ✗ | ✗ |
+| Transparent BG | ✗ | ✗ | ✓ | ✓ |
+| Multi-image Edit | ✗ | ✗ | ✓ (16 images) | ✓ (16 images) |
+| Compression Control | ✗ | ✗ | ✓ | ✓ |
+| Partial Images | ✗ | ✗ | ✗ | ✓ (0-3) |
+| Output Formats | PNG | PNG | PNG/JPEG/WebP | PNG/JPEG/WebP |
 
 ### Video Models
 
@@ -1170,5 +1179,5 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 **Note:** This service implements:
 - **Image Generation**: All three endpoints (create, edit, variation) for DALL-E 2, DALL-E 3, and GPT Image 1
 - **Video Generation**: Complete Sora API integration with text-to-video, image-to-video, remixing, and async polling
-- **Security**: Comprehensive SSRF protection, input validation, API key redaction, and error sanitization
-- **Reliability**: 199 comprehensive tests, parameter validation, and automatic retry with exponential backoff
+- **Security**: SSRF protection, input validation, API key redaction, and error sanitization
+- **Reliability**: 201 tests, parameter validation, and automatic retry with exponential backoff

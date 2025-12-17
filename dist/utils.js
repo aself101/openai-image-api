@@ -37,6 +37,12 @@ export { logger };
 function isBlockedIP(ip) {
     // Remove IPv6 bracket notation
     const cleanIP = ip.replace(/^\[|\]$/g, '');
+    // Block IPv4-mapped IPv6 addresses (::ffff:x.x.x.x format)
+    // This prevents SSRF bypass using addresses like ::ffff:127.0.0.1
+    if (cleanIP.toLowerCase().startsWith('::ffff:')) {
+        const mappedIPv4 = cleanIP.substring(7); // Extract the IPv4 part
+        return isBlockedIP(mappedIPv4); // Recursively check the mapped IPv4 address
+    }
     // Block localhost variations
     if (cleanIP === 'localhost' || cleanIP === '127.0.0.1' || cleanIP === '::1') {
         return true;
@@ -244,7 +250,13 @@ export async function imageToBase64(input) {
             // Validate URL for security
             await validateImageUrl(input);
             logger.debug(`Fetching image from URL: ${input}`);
-            const response = await axios.get(input, { responseType: 'arraybuffer' });
+            const response = await axios.get(input, {
+                responseType: 'arraybuffer',
+                timeout: 60000, // 60 second timeout
+                maxContentLength: 50 * 1024 * 1024, // 50MB limit
+                maxBodyLength: 50 * 1024 * 1024,
+                maxRedirects: 5, // Prevent redirect loops
+            });
             buffer = Buffer.from(response.data);
             // Try to detect MIME type from response
             const contentType = response.headers['content-type'];
@@ -291,7 +303,13 @@ export async function downloadImage(url, filepath) {
         logger.debug(`Downloading image from ${url} to ${filepath}`);
         const dir = path.dirname(filepath);
         await ensureDirectory(dir);
-        const response = await axios.get(url, { responseType: 'arraybuffer' });
+        const response = await axios.get(url, {
+            responseType: 'arraybuffer',
+            timeout: 60000, // 60 second timeout
+            maxContentLength: 50 * 1024 * 1024, // 50MB limit
+            maxBodyLength: 50 * 1024 * 1024,
+            maxRedirects: 5, // Prevent redirect loops
+        });
         const buffer = Buffer.from(response.data);
         await fs.writeFile(filepath, buffer);
         logger.info(`Downloaded image: ${filepath}`);

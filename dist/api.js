@@ -150,8 +150,9 @@ export class OpenAIImageAPI {
         this.logger.debug(`API request: ${method} ${endpoint}`, { headers: sanitizedHeaders });
         try {
             let response;
+            const requestTimeout = 30000; // 30 second timeout for API calls
             if (method.toUpperCase() === 'GET') {
-                response = await axios.get(url, { headers });
+                response = await axios.get(url, { headers, timeout: requestTimeout });
             }
             else if (method.toUpperCase() === 'POST') {
                 if (isMultipart) {
@@ -162,10 +163,11 @@ export class OpenAIImageAPI {
                             ...headers,
                             ...formData.getHeaders?.(),
                         },
+                        timeout: requestTimeout,
                     });
                 }
                 else {
-                    response = await axios.post(url, data, { headers });
+                    response = await axios.post(url, data, { headers, timeout: requestTimeout });
                 }
             }
             else {

@@ -452,7 +452,13 @@ describe('OpenAIImageAPI', () => {
       );
 
       expect(paths).toHaveLength(2);
-      expect(axios.get).toHaveBeenCalledWith('https://example.com/image1.png', { responseType: 'arraybuffer' });
+      expect(axios.get).toHaveBeenCalledWith('https://example.com/image1.png', {
+        responseType: 'arraybuffer',
+        timeout: 60000,
+        maxContentLength: 50 * 1024 * 1024,
+        maxBodyLength: 50 * 1024 * 1024,
+        maxRedirects: 5,
+      });
     });
 
     it('should save images from b64_json response', async () => {

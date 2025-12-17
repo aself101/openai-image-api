@@ -6,7 +6,7 @@
  */
 import type { Logger } from 'winston';
 /** Image generation model identifiers */
-export type ImageModel = 'dall-e-2' | 'dall-e-3' | 'gpt-image-1';
+export type ImageModel = 'dall-e-2' | 'dall-e-3' | 'gpt-image-1' | 'gpt-image-1.5';
 /** Video generation model identifiers */
 export type VideoModel = 'sora-2' | 'sora-2-pro';
 /** Log level options */

@@ -320,6 +320,28 @@ describe('Utility Functions', () => {
         .rejects.toThrow('resolves to internal/private IP');
     });
 
+    // IPv4-mapped IPv6 Bypass Prevention Tests
+    it('should reject IPv4-mapped IPv6 localhost addresses (SSRF bypass prevention)', async () => {
+      (lookup as Mock).mockResolvedValue({ address: '::ffff:127.0.0.1', family: 6 });
+      await expect(validateImageUrl('https://evil.com/image.jpg'))
+        .rejects.toThrow('resolves to internal/private IP');
+    });
+
+    it('should reject IPv4-mapped IPv6 private IP addresses (SSRF bypass prevention)', async () => {
+      const mappedPrivateIPs = [
+        '::ffff:10.0.0.1',      // Private Class A
+        '::ffff:192.168.1.1',   // Private Class C
+        '::ffff:172.16.0.1',    // Private Class B
+        '::ffff:169.254.169.254' // AWS metadata
+      ];
+
+      for (const ip of mappedPrivateIPs) {
+        (lookup as Mock).mockResolvedValue({ address: ip, family: 6 });
+        await expect(validateImageUrl('https://evil.com/image.jpg'))
+          .rejects.toThrow('resolves to internal/private IP');
+      }
+    });
+
     it('should handle DNS lookup failures gracefully', async () => {
       (lookup as Mock).mockRejectedValue({ code: 'ENOTFOUND' });
       await expect(validateImageUrl('https://nonexistent.domain.invalid/image.jpg'))

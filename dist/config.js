@@ -49,6 +49,7 @@ export const MODELS = {
     'dalle-2': 'dall-e-2',
     'dalle-3': 'dall-e-3',
     'gpt-image-1': 'gpt-image-1',
+    'gpt-image-1.5': 'gpt-image-1.5',
 };
 // Supported models - Videos (Sora)
 export const VIDEO_MODELS = {
@@ -80,6 +81,24 @@ export const MODEL_CONSTRAINTS = {
         responseFormats: ['url', 'b64_json'],
     },
     'gpt-image-1': {
+        sizes: ['1024x1024', '1536x1024', '1024x1536', 'auto'],
+        promptMaxLength: 32000,
+        quality: ['auto', 'high', 'medium', 'low'],
+        n: { min: 1, max: 10 },
+        backgrounds: ['auto', 'transparent', 'opaque'],
+        moderation: ['auto', 'low'],
+        outputFormats: ['png', 'jpeg', 'webp'],
+        outputCompression: { min: 0, max: 100 },
+        partialImages: { min: 0, max: 3 },
+        inputFidelity: ['high', 'low'],
+        supportsEdit: true,
+        supportsVariation: false,
+        responseFormat: 'b64_json', // Always returns base64
+        imageMaxSize: 50 * 1024 * 1024, // 50MB
+        imageFormats: ['png', 'webp', 'jpg'],
+        editMaxImages: 16,
+    },
+    'gpt-image-1.5': {
         sizes: ['1024x1024', '1536x1024', '1024x1536', 'auto'],
         promptMaxLength: 32000,
         quality: ['auto', 'high', 'medium', 'low'],

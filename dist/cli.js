@@ -332,7 +332,8 @@ program
 program
     .option('--dalle-2', 'Use DALL-E 2 model')
     .option('--dalle-3', 'Use DALL-E 3 model')
-    .option('--gpt-image-1', 'Use GPT Image 1 model');
+    .option('--gpt-image-1', 'Use GPT Image 1 model')
+    .option('--gpt-image-15', 'Use GPT Image 1.5 model');
 // Video model selection (mutually exclusive)
 program
     .option('--sora-2', 'Use Sora 2 model (fast video generation)')
@@ -426,6 +427,8 @@ async function main() {
             model = MODELS['dalle-3'];
         if (options.gptImage1)
             model = MODELS['gpt-image-1'];
+        if (options.gptImage15)
+            model = MODELS['gpt-image-1.5'];
         // Determine operation mode
         const isEdit = options.edit;
         const isVariation = options.variation;
