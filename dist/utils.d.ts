@@ -33,6 +33,15 @@ export declare function validateImageUrl(url: string): Promise<string>;
  */
 export declare function validateImagePath(filepath: string): Promise<string>;
 /**
+ * Validate output path for path traversal attacks.
+ *
+ * @param outputPath - Path to validate
+ * @param basePath - Optional base path that output must be within
+ * @returns The resolved absolute path
+ * @throws Error if path contains traversal sequences or escapes base path
+ */
+export declare function validateOutputPath(outputPath: string, basePath?: string): string;
+/**
  * Ensure a directory exists, creating it if necessary.
  *
  * @param dirPath - Directory path to ensure

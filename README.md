@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/openai-image-api.svg)](https://www.npmjs.com/package/openai-image-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/openai-image-api)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-201%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-207%20passing-brightgreen)](test/)
 
 A Node.js wrapper for the [OpenAI Image Generation API](https://platform.openai.com/docs/api-reference/images) and [OpenAI Video Generation API](https://platform.openai.com/docs/api-reference/video). Supports DALL-E 2, DALL-E 3, GPT Image 1, and Sora models. Generate, edit, and create variations of images, plus generate and remix videos via CLI or programmatic API.
 
@@ -86,7 +86,7 @@ This Node.js service implements:
 - **Async Video Polling** - Automatic progress tracking with spinner UI and cancellation support
 - **Organized Storage** - Structured directories with timestamped files and metadata
 - **CLI Orchestration** - Command-line tool for batch generation
-- **Testing** - 201 tests with Vitest
+- **Testing** - 207 tests with Vitest
 
 ## Models
 
@@ -981,7 +981,7 @@ npm run test:coverage
 
 ### Test Coverage
 
-The test suite includes 201 tests covering:
+The test suite includes 207 tests covering:
 
 **Image API (128 tests):**
 - API authentication and key validation
@@ -1180,4 +1180,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - **Image Generation**: All three endpoints (create, edit, variation) for DALL-E 2, DALL-E 3, and GPT Image 1
 - **Video Generation**: Complete Sora API integration with text-to-video, image-to-video, remixing, and async polling
 - **Security**: SSRF protection, input validation, API key redaction, and error sanitization
-- **Reliability**: 201 tests, parameter validation, and automatic retry with exponential backoff
+- **Reliability**: 207 tests, parameter validation, and automatic retry with exponential backoff

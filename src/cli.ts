@@ -35,6 +35,7 @@ import {
   logger,
   saveVideoFile,
   saveVideoMetadata,
+  validateOutputPath,
 } from './utils.js';
 import { getOutputDir, getModelConstraints, MODELS, VIDEO_MODELS } from './config.js';
 import type { ImageModel, VideoModel, ImageModelConstraints } from './types.js';
@@ -283,7 +284,13 @@ async function handleVideoMode(options: CLIOptions): Promise<void> {
   });
 
   // Determine output directory
-  const outputDir = options.outputDir || path.join(getOutputDir(), model);
+  let outputDir: string;
+  if (options.outputDir) {
+    // Validate user-provided output path for path traversal
+    outputDir = validateOutputPath(options.outputDir);
+  } else {
+    outputDir = path.join(getOutputDir(), model);
+  }
   await ensureDirectory(outputDir);
 
   // Handle list videos
@@ -593,7 +600,13 @@ async function main(): Promise<void> {
 
     // Determine output directory
     const modelDir = model.replace('dall-e-', 'dalle-');
-    const outputDir = options.outputDir || path.join(getOutputDir(), modelDir);
+    let outputDir: string;
+    if (options.outputDir) {
+      // Validate user-provided output path for path traversal
+      outputDir = validateOutputPath(options.outputDir);
+    } else {
+      outputDir = path.join(getOutputDir(), modelDir);
+    }
     await ensureDirectory(outputDir);
 
     logger.info(`Using model: ${model}`);

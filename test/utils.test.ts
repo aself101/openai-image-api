@@ -24,6 +24,7 @@ import {
   decodeBase64Image,
   validateImageUrl,
   validateImagePath,
+  validateOutputPath,
   pollVideoWithProgress,
   saveVideoFile,
   generateVideoFilename,
@@ -642,6 +643,40 @@ describe('Utility Functions', () => {
         expect(result.valid).toBe(false);
         expect(result.errors[0]).toContain('exceeds maximum');
       });
+    });
+  });
+
+  describe('Security: validateOutputPath', () => {
+    it('should accept valid absolute paths', () => {
+      const result = validateOutputPath('/tmp/output');
+      expect(result).toBe('/tmp/output');
+    });
+
+    it('should accept valid relative paths and resolve them', () => {
+      const result = validateOutputPath('output');
+      expect(path.isAbsolute(result)).toBe(true);
+      expect(result.endsWith('output')).toBe(true);
+    });
+
+    it('should reject paths with .. traversal sequences', () => {
+      expect(() => validateOutputPath('/tmp/../etc/passwd'))
+        .toThrow('Path traversal sequences (..) are not allowed');
+    });
+
+    it('should reject paths with embedded .. sequences', () => {
+      expect(() => validateOutputPath('/tmp/foo/../../etc'))
+        .toThrow('Path traversal sequences (..) are not allowed');
+    });
+
+    it('should validate paths stay within base path when provided', () => {
+      const result = validateOutputPath('/home/user/project/output', '/home/user/project');
+      expect(result).toBe('/home/user/project/output');
+    });
+
+    it('should reject paths that escape base path', () => {
+      // Even without .., a path outside base should be rejected
+      expect(() => validateOutputPath('/etc/passwd', '/home/user/project'))
+        .toThrow('Output path must be within /home/user/project');
     });
   });
 });

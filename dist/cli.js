@@ -23,7 +23,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
 import { OpenAIImageAPI, OpenAIVideoAPI } from './api.js';
-import { generateTimestampedFilename, generateVideoFilename, writeToFile, ensureDirectory, setLogLevel, createSpinner, logger, saveVideoFile, saveVideoMetadata, } from './utils.js';
+import { generateTimestampedFilename, generateVideoFilename, writeToFile, ensureDirectory, setLogLevel, createSpinner, logger, saveVideoFile, saveVideoMetadata, validateOutputPath, } from './utils.js';
 import { getOutputDir, getModelConstraints, MODELS, VIDEO_MODELS } from './config.js';
 // ES module dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -205,7 +205,14 @@ async function handleVideoMode(options) {
         logLevel: options.logLevel,
     });
     // Determine output directory
-    const outputDir = options.outputDir || path.join(getOutputDir(), model);
+    let outputDir;
+    if (options.outputDir) {
+        // Validate user-provided output path for path traversal
+        outputDir = validateOutputPath(options.outputDir);
+    }
+    else {
+        outputDir = path.join(getOutputDir(), model);
+    }
     await ensureDirectory(outputDir);
     // Handle list videos
     if (options.listVideos) {
@@ -458,7 +465,14 @@ async function main() {
         });
         // Determine output directory
         const modelDir = model.replace('dall-e-', 'dalle-');
-        const outputDir = options.outputDir || path.join(getOutputDir(), modelDir);
+        let outputDir;
+        if (options.outputDir) {
+            // Validate user-provided output path for path traversal
+            outputDir = validateOutputPath(options.outputDir);
+        }
+        else {
+            outputDir = path.join(getOutputDir(), modelDir);
+        }
         await ensureDirectory(outputDir);
         logger.info(`Using model: ${model}`);
         logger.info(`Operation: ${isEdit ? 'edit' : isVariation ? 'variation' : 'generate'}`);

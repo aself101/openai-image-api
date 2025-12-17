@@ -209,6 +209,34 @@ export async function validateImagePath(filepath: string): Promise<string> {
 }
 
 /**
+ * Validate output path for path traversal attacks.
+ *
+ * @param outputPath - Path to validate
+ * @param basePath - Optional base path that output must be within
+ * @returns The resolved absolute path
+ * @throws Error if path contains traversal sequences or escapes base path
+ */
+export function validateOutputPath(outputPath: string, basePath?: string): string {
+  // Check for obvious path traversal patterns
+  if (outputPath.includes('..')) {
+    throw new Error('Path traversal sequences (..) are not allowed in output paths');
+  }
+
+  // Resolve to absolute path
+  const resolved = path.resolve(outputPath);
+
+  // If base path provided, ensure output stays within it
+  if (basePath) {
+    const resolvedBase = path.resolve(basePath);
+    if (!resolved.startsWith(resolvedBase + path.sep) && resolved !== resolvedBase) {
+      throw new Error(`Output path must be within ${basePath}`);
+    }
+  }
+
+  return resolved;
+}
+
+/**
  * Ensure a directory exists, creating it if necessary.
  *
  * @param dirPath - Directory path to ensure
