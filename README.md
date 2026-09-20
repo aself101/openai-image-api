@@ -1,13 +1,15 @@
-# OpenAI Image & Video Generation Service
+# OpenAI Image Generation Service
 
 [![npm version](https://img.shields.io/npm/v/openai-image-api.svg)](https://www.npmjs.com/package/openai-image-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/openai-image-api)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-207%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-160%20passing-brightgreen)](test/)
 
-A Node.js wrapper for the [OpenAI Image Generation API](https://platform.openai.com/docs/api-reference/images) and [OpenAI Video Generation API](https://platform.openai.com/docs/api-reference/video). Supports DALL-E 2, DALL-E 3, GPT Image 1, and Sora models. Generate, edit, and create variations of images, plus generate and remix videos via CLI or programmatic API.
+A Node.js wrapper for the [OpenAI Image API](https://developers.openai.com/api/reference/resources/images) — `/v1/images/generations` and `/v1/images/edits` — for the GPT Image model family: **GPT Image 2.5** (Sunburst, Flare), **GPT Image 2**, and the deprecated GPT Image 1.x models. Generate and edit images, with streaming partial-image delivery, via CLI or programmatic API.
 
 This service follows the data-collection architecture pattern with organized data storage, logging, parameter validation, and CLI orchestration. Written in **TypeScript** with full type definitions included.
+
+> **Upgrading from 2.x?** DALL-E 2/3, image variations, and Sora video generation were removed in 3.0.0 because OpenAI has shut down (or is about to shut down) those APIs. See [Migrating from 2.x](#migrating-from-2x).
 
 ## Quick Start
 
@@ -18,44 +20,37 @@ npm install -g openai-image-api
 
 export OPENAI_API_KEY="your-api-key-here"
 
-# Generate an image
-openai-img --dalle-3 --prompt "a serene mountain landscape"
+# Generate an image (default model: gpt-image-2.5-flare)
+openai-img --prompt "a serene mountain landscape"
 
-# Generate a video
-openai-img --video --sora-2 --prompt "a cat sitting on a windowsill watching the rain" --seconds 4
+# Stream partial frames while it renders
+openai-img --stream --partial-images 2 --prompt "a river made of owl feathers"
+
+# Edit an image
+openai-img --sunburst --edit --image photo.png --prompt "make the sky stormy"
 ```
 
 ### Programmatic Usage
 ```typescript
 import { OpenAIImageAPI } from 'openai-image-api';
-import { OpenAIVideoAPI } from 'openai-image-api/video-api';
 
-const imageApi = new OpenAIImageAPI();
+const api = new OpenAIImageAPI();
 
-// Generate an image with DALL-E 3
-const imageResult = await imageApi.generateImage({
+// Buffered generation
+const result = await api.generateImage({
   prompt: 'a serene mountain landscape',
-  model: 'dall-e-3',
-  quality: 'hd',
-  size: '1792x1024'
+  model: 'gpt-image-2.5-flare',
+  quality: 'high',
+  size: '1536x1024',
 });
+await api.saveImages(result, './out', 'mountains');   // → ./out/mountains.png
 
-console.log('Image URL:', imageResult.data[0].url);
-
-// Generate a video with Sora
-const videoApi = new OpenAIVideoAPI();
-const videoResult = await videoApi.createVideo({
-  prompt: 'a cat sitting on a windowsill watching the rain',
-  model: 'sora-2',
-  seconds: '4'
-});
-
-// Wait for completion
-const completedVideo = await videoApi.waitForVideo(videoResult.id);
-
-// Download the video content
-const videoBuffer = await videoApi.downloadVideoContent(completedVideo.id);
-console.log('Video downloaded:', videoBuffer.length, 'bytes');
+// Streaming generation with partial frames
+const streamed = await api.generateImageStream(
+  { prompt: 'a river made of owl feathers', partial_images: 2 },
+  { onPartialImage: (e) => console.log(`partial ${e.partial_image_index} arrived`) }
+);
+await api.saveImages(streamed, './out', 'river');
 ```
 
 ## Table of Contents
@@ -67,115 +62,49 @@ console.log('Video downloaded:', videoBuffer.length, 'bytes');
 - [TypeScript Support](#typescript-support)
 - [CLI Usage](#cli-usage)
 - [API Methods](#api-methods)
+- [Streaming](#streaming)
 - [Examples](#examples)
 - [Data Organization](#data-organization)
 - [Testing](#testing)
+- [Error Handling](#error-handling)
 - [Troubleshooting](#troubleshooting)
+- [Migrating from 2.x](#migrating-from-2x)
 
 ## Overview
 
-This Node.js service implements:
+The package wraps the two Image API endpoints:
 
-- **6 Generation Models** - DALL-E 2, DALL-E 3, GPT Image 1, GPT Image 1.5, Sora 2, Sora 2 Pro
-- **Image Operations** - Generate, Edit, Variation
-- **Video Operations** - Create (text-to-video), Create (image-to-video), List, Retrieve, Delete, Remix
-- **Parameter Validation** - Pre-flight validation catches invalid parameters before API calls
-- **Security** - SSRF protection with DNS rebinding prevention, input validation, rate limiting, log sanitization
-- **API Key Authentication** - Simple Bearer token authentication
-- **Batch Processing** - Generate multiple images sequentially from multiple prompts
-- **Async Video Polling** - Automatic progress tracking with spinner UI and cancellation support
-- **Organized Storage** - Structured directories with timestamped files and metadata
-- **CLI Orchestration** - Command-line tool for batch generation
-- **Testing** - 207 tests with Vitest
+| Endpoint | Method | Streaming variant |
+|---|---|---|
+| `POST /v1/images/generations` | `generateImage()` | `streamImage()` / `generateImageStream()` |
+| `POST /v1/images/edits` | `generateImageEdit()` | `streamImageEdit()` / `generateImageEditStream()` |
+
+Every request is validated client-side against the model's published constraints (sizes, quality tiers, formats, `n`, `partial_images`, `input_fidelity`) before any network call, so a bad parameter fails fast with a specific message rather than a generic 400.
+
+The Responses API `image_generation` *tool* (multi-turn conversational editing) is a different surface and is not wrapped here.
 
 ## Models
 
-### DALL-E 2
+| Model | Sizes | Quality | Notes |
+|---|---|---|---|
+| `gpt-image-2.5-sunburst` | standard + flexible | `auto` `low` `medium` `high` `xhigh` `max` | Editing precision |
+| `gpt-image-2.5-flare` **(default)** | standard + flexible | `auto` `low` `medium` `high` `xhigh` `max` | Fast, high-quality everyday generation |
+| `gpt-image-2` | standard + flexible | `auto` `low` `medium` `high` | Up to 4K |
+| `gpt-image-1.5` | standard | `auto` `low` `medium` `high` | **Shutdown 2026-12-01** |
+| `gpt-image-1` | standard | `auto` `low` `medium` `high` | **Shutdown 2026-10-23** |
+| `gpt-image-1-mini` | standard | `auto` `low` `medium` `high` | **Shutdown 2026-12-01** |
 
-Image generation with multiple size options. Supports editing and variations.
+**Standard sizes:** `1024x1024`, `1536x1024`, `1024x1536`, `auto`.
 
-**Parameters:**
-- `prompt` - Text description of desired image (required for generation)
-- `size` - Image dimensions (256x256, 512x512, 1024x1024)
-- `n` - Number of images to generate (1-10)
-- `image` - Input image for edits/variations (PNG with transparency)
-- `mask` - Mask image for edits (PNG with transparency, edit areas transparent)
+**Flexible sizes** (gpt-image-2 and 2.5): any `WIDTHxHEIGHT` where both edges are multiples of 16, the aspect ratio is between 1:3 and 3:1, neither edge exceeds 3840 px, and total pixels fall between 655,360 and 8,294,400. Resolutions above 2560x1440 are documented as experimental. Examples: `1536x864`, `2048x1152`, `3840x2160`.
 
-**Features:** Generate, edit, variations
+**Common parameters (all models):** `n` 1–10 · `background` `auto|transparent|opaque` · `output_format` `png|jpeg|webp` · `output_compression` 0–100 (jpeg/webp only) · `moderation` `auto|low` · prompt up to 32,000 characters · up to 16 input images per edit.
 
-### DALL-E 3
+**`input_fidelity`** (`high|low`) is accepted on edits by the gpt-image-1.x models only. gpt-image-2 and both 2.5 models reject it and always process inputs at high fidelity — the API reference documents this for gpt-image-2; the 2.5 behaviour was confirmed against the live API on 2026-09-20.
 
-Image generation with HD support and style control.
+**Dated snapshots** — `gpt-image-2.5-sunburst-2026-09-08`, `gpt-image-2.5-flare-2026-09-08`, `gpt-image-2-2026-04-21` — are accepted anywhere a model is, via `--model <id>` on the CLI or `model:` in code, and validate with their family's constraints.
 
-**Parameters:**
-- `prompt` - Text description of desired image (required)
-- `size` - Image dimensions (1024x1024, 1792x1024 landscape, 1024x1792 portrait)
-- `quality` - Output quality (standard, hd)
-- `style` - Image style (vivid, natural)
-- `n` - Always 1 (DALL-E 3 only generates one image at a time)
-
-**Features:** HD quality, vivid/natural styles
-
-### GPT Image 1
-
-Image generation with transparency, multi-image editing, and compression control.
-
-**Parameters:**
-- `prompt` - Text description of desired image (required)
-- `size` - Image dimensions (1024x1024, 1536x1024, 1024x1536, auto)
-- `n` - Number of images to generate (1-10)
-- `format` - Output format (png, jpeg, webp)
-- `compression` - Compression quality (0-100, for JPEG/WebP)
-- `transparency` - Enable transparent backgrounds (boolean)
-- `images` - Multiple input images for editing (array)
-- `moderation` - Content moderation control
-
-**Features:** Transparent backgrounds, multi-image editing, compression, moderation control
-
-**⚠️ IMPORTANT:** GPT Image 1 requires a verified organization. See [Organization Verification](#organization-verification) below.
-
-### GPT Image 1.5
-
-Same capabilities as GPT Image 1, plus partial image streaming support.
-
-**Parameters:**
-- `prompt` - Text description of desired image (required)
-- `size` - Image dimensions (1024x1024, 1536x1024, 1024x1536, auto)
-- `n` - Number of images to generate (1-10)
-- `format` - Output format (png, jpeg, webp)
-- `compression` - Compression quality (0-100, for JPEG/WebP)
-- `transparency` - Enable transparent backgrounds (boolean)
-- `images` - Multiple input images for editing (array)
-- `moderation` - Content moderation control
-- `partial_images` - Number of partial images to return during generation (0-3)
-
-**Features:** All GPT Image 1 features, plus partial image streaming
-
-**⚠️ IMPORTANT:** GPT Image 1.5 requires a verified organization. See [Organization Verification](#organization-verification) below.
-
-### Sora 2
-
-Video generation with text-to-video and image-to-video capabilities.
-
-**Parameters:**
-- `prompt` - Text description of desired video (required)
-- `size` - Video dimensions (1280x720, 1920x1080, 1080x1920)
-- `seconds` - Video duration: "4", "8", or "12" seconds
-- `input_reference` - Optional reference image for image-to-video generation (PNG, JPEG, WebP)
-
-**Features:** Text-to-video, image-to-video, video remixing, async polling with progress tracking
-
-### Sora 2 Pro
-
-Video generation with higher quality output.
-
-**Parameters:**
-- `prompt` - Text description of desired video (required)
-- `size` - Video dimensions (1280x720, 1920x1080, 1080x1920)
-- `seconds` - Video duration: "4", "8", or "12" seconds
-- `input_reference` - Optional reference image for image-to-video generation (PNG, JPEG, WebP)
-
-**Features:** Enhanced quality, text-to-video, image-to-video, video remixing
+**Deprecated models** still work until their shutdown dates. The API class logs a warning (once per model per instance) when one is used; the CLI prints the same notice. Source: [OpenAI deprecations](https://developers.openai.com/api/docs/deprecations).
 
 ## Authentication Setup
 
@@ -194,7 +123,7 @@ You can provide your API key in multiple ways (listed in priority order):
 #### Option A: CLI Flag (Highest Priority)
 
 ```bash
-openai-img --api-key YOUR_API_KEY --dalle-3 --prompt "a cat"
+openai-img --api-key YOUR_API_KEY --prompt "a cat"
 ```
 
 #### Option B: Environment Variable
@@ -204,7 +133,7 @@ openai-img --api-key YOUR_API_KEY --dalle-3 --prompt "a cat"
 export OPENAI_API_KEY=your_actual_api_key_here
 
 # Or use it for a single command
-OPENAI_API_KEY=your_key openai-img --dalle-3 --prompt "a cat"
+OPENAI_API_KEY=your_key openai-img --prompt "a cat"
 ```
 
 #### Option C: Local .env File
@@ -226,22 +155,13 @@ echo "OPENAI_API_KEY=your_actual_api_key_here" > ~/.openai/.env
 
 **Security Note:** Never commit `.env` files or expose your API key publicly.
 
-### 3. Organization Verification (Required for GPT Image 1)
+### 3. Organization Verification
 
-If you want to use the **gpt-image-1** model, you must verify your OpenAI organization. Without verification, you'll receive a 400-level error when attempting to use this model.
-
-**Verification Process:**
+OpenAI may require [API Organization Verification](https://help.openai.com/en/articles/10910291-api-organization-verification) before GPT Image models can be used. Without it you'll receive a 400-level error.
 
 1. Go to your [OpenAI Organization Settings](https://platform.openai.com/settings/organization/general)
-2. Navigate to the verification section
-3. Complete the KYC (Know Your Customer) process which requires:
-   - Photo of government-issued ID
-   - Selfie/photo of yourself
-4. Wait for verification approval (typically processed within a few business days)
-
-**Why is this required?** OpenAI requires organization verification for GPT Image 1 to prevent abuse and ensure responsible use of advanced image generation features like transparent backgrounds and multi-image editing.
-
-**Note:** DALL-E 2 and DALL-E 3 do NOT require organization verification and can be used immediately with a valid API key.
+2. Complete the verification process (government ID + selfie)
+3. Wait for approval (typically a few business days)
 
 ## Installation
 
@@ -258,149 +178,65 @@ npm install openai-image-api
 ### Option 2: Install from source
 
 ```bash
-# Clone the repository
 git clone https://github.com/aself101/openai-image-api.git
 cd openai-image-api
-
-# Install dependencies
 npm install
+npm run build
 ```
-
-Dependencies:
-- `axios` - HTTP client for API calls
-- `commander` - CLI argument parsing
-- `dotenv` - Environment variable management
-- `form-data` - Multipart form data for file uploads
-- `winston` - Logging framework
-- `typescript` - TypeScript compiler (dev dependency)
 
 ## TypeScript Support
 
-This package is written in TypeScript and includes full type definitions. All types are exported for use in your TypeScript projects.
+This package is written in TypeScript and includes full type definitions. All types are exported.
 
 ### Importing Types
 
 ```typescript
 import {
   OpenAIImageAPI,
-  // Type definitions
   type GenerateImageParams,
   type EditImageParams,
-  type VariationImageParams,
+  type StreamImageParams,
+  type StreamEditImageParams,
   type ImageResponse,
   type ImageModel,
-  type APIOptions
+  type ImageQuality,
+  type ImageGenerationStreamEvent,
+  type ImageEditStreamEvent,
+  type APIOptions,
 } from 'openai-image-api';
 
+// Constraints and helpers
 import {
-  OpenAIVideoAPI,
-  type CreateVideoParams,
-  type VideoObject,
-  type ListVideosResponse,
-  type VideoModel,
-  type PollVideoOptions
-} from 'openai-image-api/video-api';
+  MODEL_CONSTRAINTS,
+  MODEL_DEPRECATIONS,
+  DEFAULT_MODEL,
+  validateModelParams,
+  validateFlexibleSize,
+  getModelConstraints,
+} from 'openai-image-api/config';
 ```
 
 ### Project Structure
 
 ```
-openai-api/
-├── src/                    # TypeScript source files
-│   ├── api.ts              # Image API class
-│   ├── video-api.ts        # Video API class
-│   ├── config.ts           # Configuration & validation
-│   ├── utils.ts            # Utility functions
+openai-image-api/
+├── src/
+│   ├── api.ts              # OpenAIImageAPI class (buffered + streaming)
+│   ├── config.ts           # Model constraints, deprecations, validation
+│   ├── utils.ts            # File I/O, SSRF-safe URL checks, SSE parser
 │   ├── cli.ts              # CLI entry point
 │   └── types.ts            # Type definitions
-├── dist/                   # Compiled JavaScript (generated)
-├── test/                   # Test files (TypeScript)
-└── tsconfig.json           # TypeScript configuration
+├── dist/                   # Compiled JavaScript (committed for npm)
+├── test/                   # Vitest suites
+└── tsconfig.json
 ```
 
 ### Building from Source
 
 ```bash
-# Install dependencies
 npm install
-
-# Build TypeScript to JavaScript
-npm run build
-
-# Watch mode for development
+npm run build          # tsc → dist/
 npm run build:watch
-```
-
-## Quick Start
-
-### Using the CLI
-
-The CLI command depends on how you installed the package:
-
-**If installed globally** (`npm install -g openai-image-api`):
-```bash
-openai-img --examples                         # Show usage examples
-openai-img --dalle-3 --prompt "a cat"         # Generate with DALL-E 3
-```
-
-**If installed locally** in a project:
-```bash
-npx openai-img --examples                     # Show usage examples
-npx openai-img --dalle-3 --prompt "a cat"     # Generate with DALL-E 3
-```
-
-**If working from source** (cloned repository):
-```bash
-npm run openai:examples                       # Show usage examples
-npm run openai -- --dalle-3 --prompt "a cat"  # Generate
-```
-
-### Example Commands
-
-```bash
-# Show examples
-openai-img --examples
-
-# Generate with DALL-E 3
-openai-img --dalle-3 --prompt "a serene mountain landscape"
-
-# Generate with GPT Image 1 (transparent background)
-openai-img --gpt-image-1 --prompt "a cute robot" --background transparent
-
-# Edit image with DALL-E 2
-openai-img --dalle-2 --edit --image photo.png --prompt "add snow"
-
-# Batch generation
-openai-img --dalle-3 \
-  --prompt "a cat" \
-  --prompt "a dog" \
-  --prompt "a bird"
-```
-
-**Note:** Examples below use `openai-img` directly (global install). If using local install, prefix with `npx`: `npx openai-img --dalle-3 ...`
-
-### Using the API Class Directly
-
-```typescript
-// If installed via npm
-import { OpenAIImageAPI } from 'openai-image-api';
-
-// If running from source
-import { OpenAIImageAPI } from './dist/api.js';
-
-// Initialize the API
-const api = new OpenAIImageAPI();
-
-// Generate with DALL-E 3
-const result = await api.generateImage({
-  prompt: 'a beautiful sunset',
-  model: 'dall-e-3',
-  size: '1024x1024',
-  quality: 'hd',
-  style: 'vivid'
-});
-
-console.log('Generated images:', result.data);
 ```
 
 ## CLI Usage
@@ -408,754 +244,349 @@ console.log('Generated images:', result.data);
 ### Basic Command Structure
 
 ```bash
-# Global install
-openai-img [model] [options]
-
-# Local install (use npx)
-npx openai-img [model] [options]
-
-# From source (development)
-npm run openai -- [model] [options]
+openai-img [model] [operation] --prompt "..." [options]
 ```
 
-### Model Selection (Required)
+### Model Selection
 
-Choose one model:
+The default is `gpt-image-2.5-flare`. Override with a shortcut flag or `--model`:
 
-**Image Models:**
 ```bash
---dalle-2          # DALL-E 2
---dalle-3          # DALL-E 3
---gpt-image-1      # GPT Image 1
---gpt-image-15     # GPT Image 1.5 (adds partial image streaming)
-```
-
-**Video Models:**
-```bash
---video --sora-2       # Sora 2
---video --sora-2-pro   # Sora 2 Pro
+--flare                 # gpt-image-2.5-flare (default)
+--sunburst              # gpt-image-2.5-sunburst
+--gpt-image-2           # gpt-image-2
+--gpt-image-15          # gpt-image-1.5   (deprecated, shutdown 2026-12-01)
+--gpt-image-1           # gpt-image-1     (deprecated, shutdown 2026-10-23)
+--gpt-image-1-mini      # gpt-image-1-mini (deprecated, shutdown 2026-12-01)
+--model <id>            # any supported id, including dated snapshots; wins over shortcuts
 ```
 
 ### Operation Mode
 
-**Image Operations:**
 ```bash
-# Default: generate new image
---edit             # Edit existing image(s)
---variation        # Create variations of image
+# Default: generate
+openai-img --prompt "a cat"
+
+# Edit one or more images (repeat --image up to 16 times)
+openai-img --edit --image a.png --image b.png --prompt "combine into a collage"
+
+# Stream, saving partial frames beside the final image
+openai-img --stream --partial-images 2 --prompt "a cat"
 ```
 
-**Video Operations:**
-```bash
---video            # Enable video mode (required for video generation)
---list-videos      # List all videos
---delete-video <id> # Delete a video by ID
---remix-video <id>  # Remix an existing video
-```
+### Options
 
-### Common Options
+| Option | Description |
+|---|---|
+| `--prompt <text>` | Text prompt (repeat for batch generation) |
+| `--image <path>` | Input image for `--edit` (repeatable) |
+| `--mask <path>` | Mask image for `--edit` |
+| `--size <size>` | `WIDTHxHEIGHT` or `auto` |
+| `--quality <q>` | `auto`, `low`, `medium`, `high`; `xhigh`, `max` on 2.5 |
+| `--n <number>` | Images per request, 1–10 |
+| `--background <bg>` | `auto`, `transparent`, `opaque` |
+| `--output-format <f>` | `png`, `jpeg`, `webp` |
+| `--output-compression <pct>` | 0–100, jpeg/webp only |
+| `--moderation <level>` | `auto`, `low` |
+| `--input-fidelity <level>` | `high`, `low` — gpt-image-1.x edits only |
+| `--stream` | Stream the response |
+| `--partial-images <n>` | 0–3 partial frames (requires `--stream`) |
+| `--user <id>` | End-user identifier |
+| `--api-key <key>` | Override environment key |
+| `--output-dir <path>` | Output directory (default `datasets/openai/<model>`) |
+| `--log-level <level>` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `--dry-run` | Validate parameters without calling the API |
+| `--examples` | Show usage examples |
 
-**Image Options:**
-```bash
---prompt <text>                # Prompt (can specify multiple for batch)
---image <path>                 # Input image (required for edit/variation)
---mask <path>                  # Mask image for editing
---size <size>                  # Image size (e.g., 1024x1024)
---quality <quality>            # Image quality
---n <number>                   # Number of images to generate
---response-format <format>     # url or b64_json (dalle-2/3 only)
---output-dir <path>            # Custom output directory
---log-level <level>            # DEBUG, INFO, WARNING, ERROR
---dry-run                      # Preview without API call
---examples                     # Show usage examples
-```
-
-**Video Options:**
-```bash
---prompt <text>                # Video description (required for generation)
---input-reference <path>       # Reference image for image-to-video
---size <dimensions>            # Video dimensions (1280x720, 1920x1080, 1080x1920)
---seconds <duration>           # Video duration ("4", "8", or "12")
---list-videos                  # List all videos
---delete-video <id>            # Delete a video by ID
---remix-video <id>             # Remix an existing video with new prompt
---output-dir <path>            # Custom output directory
---log-level <level>            # DEBUG, INFO, WARNING, ERROR
-```
-
-### DALL-E 3 Specific
-
-```bash
---style <style>                # vivid or natural
---quality <quality>            # standard or hd
-```
-
-### GPT Image 1 Specific
-
-```bash
---background <bg>              # auto, transparent, or opaque
---moderation <level>           # auto or low
---output-format <format>       # png, jpeg, or webp
---output-compression <0-100>   # Compression percentage
---input-fidelity <level>       # high or low (edit only)
-```
-
-### Utility Commands
-
-```bash
-# General
-npm run openai:help            # Show help
-npm run openai:examples        # Show usage examples
-
-# Video-specific
-npm run openai:sora-2          # Quick Sora 2 generation
-npm run openai:sora-2-pro      # Quick Sora 2 Pro generation
-npm run openai:list-videos     # List all videos
-```
+`--dry-run` runs the same validator the API class does, so it reports the exact rejection a real request would receive.
 
 ## API Methods
 
-### Core Generation Methods
+All methods live on `OpenAIImageAPI`.
 
-#### `generateImage(params)`
-
-Generate image from text prompt.
+### `new OpenAIImageAPI(options?)`
 
 ```typescript
-import { OpenAIImageAPI } from 'openai-image-api';
+const api = new OpenAIImageAPI({
+  apiKey: 'sk-...',          // default: OPENAI_API_KEY
+  baseUrl: 'https://...',    // default: https://api.openai.com (HTTPS enforced)
+  logLevel: 'INFO',          // DEBUG | INFO | WARNING | ERROR
+  rateLimitDelay: 1000,      // ms between requests
+  requestTimeout: 180000,    // ms; image generation can take minutes at high quality
+});
+```
 
-const api = new OpenAIImageAPI();
+### `generateImage(params): Promise<ImageResponse>`
 
+```typescript
 const result = await api.generateImage({
-  prompt: 'a beautiful landscape',
-  model: 'dall-e-3',
-  size: '1024x1024',
-  quality: 'hd',
-  style: 'vivid'
+  prompt: 'a cat',                 // required, ≤ 32,000 chars
+  model: 'gpt-image-2.5-flare',    // default
+  size: '1536x1024',
+  quality: 'high',
+  n: 1,
+  background: 'auto',
+  output_format: 'png',
+  output_compression: 80,          // jpeg/webp only
+  moderation: 'auto',
+  user: 'user-123',
 });
+// result.data[i].b64_json, result.usage, result.output_format, result.quality, result.size, result.background
 ```
 
-#### `generateImageEdit(params)`
-
-Edit existing image with prompt.
-
-```javascript
-const result = await api.generateImageEdit({
-  image: './photo.png',  // or array for gpt-image-1
-  prompt: 'add snow and winter atmosphere',
-  model: 'dall-e-2',
-  mask: './mask.png',    // optional
-  size: '1024x1024'
-});
-```
-
-#### `generateImageVariation(params)`
-
-Create variations of existing image.
-
-```javascript
-const result = await api.generateImageVariation({
-  image: './original.png',
-  model: 'dall-e-2',
-  n: 4,
-  size: '1024x1024'
-});
-```
-
-#### `saveImages(response, outputDir, baseFilename, format)`
-
-Download and save images from API response.
-
-```javascript
-const savedPaths = await api.saveImages(
-  response,
-  './output',
-  'my-image',
-  'png'
-);
-```
-
-### Video Generation Methods
-
-#### `createVideo(params)`
-
-Generate video from text prompt or reference image.
+### `generateImageEdit(params): Promise<ImageResponse>`
 
 ```typescript
-import { OpenAIVideoAPI } from 'openai-image-api/video-api';
-
-const api = new OpenAIVideoAPI();
-
-// Text-to-video
-const videoJob = await api.createVideo({
-  prompt: 'a cat sitting on a windowsill watching the rain',
-  model: 'sora-2',
-  size: '1280x720',
-  seconds: '4'
-});
-
-// Image-to-video
-const videoFromImage = await api.createVideo({
-  prompt: 'animate this scene with gentle movement',
-  model: 'sora-2',
-  input_reference: './reference.png',
-  seconds: '8'
+const result = await api.generateImageEdit({
+  image: ['a.png', 'b.png'],       // string | string[], up to 16
+  prompt: 'combine these',
+  model: 'gpt-image-2.5-sunburst',
+  mask: 'mask.png',                // optional
+  input_fidelity: 'high',          // gpt-image-1.x only
+  // ...plus every generateImage option except prompt handling
 });
 ```
 
-#### `retrieveVideo(videoId)`
+Images are sent as multipart `image[]` parts; the mask as `mask`.
 
-Get the status and details of a video generation job.
+### `streamImage(params): AsyncGenerator<ImageGenerationStreamEvent>`
 
-```javascript
-const video = await api.retrieveVideo('video_abc123');
-console.log('Status:', video.status);
-console.log('Progress:', video.progress);
-```
+Yields `image_generation.partial_image` events (0–`partial_images` of them) followed by one `image_generation.completed` event. See [Streaming](#streaming).
 
-#### `waitForVideo(videoId, options)`
+### `generateImageStream(params, handlers?): Promise<ImageResponse>`
 
-Poll for video completion with automatic progress tracking.
+Wraps `streamImage`: calls `handlers.onPartialImage(event)` for each partial frame and resolves to the completed image in the same shape `generateImage` returns, so `saveImages` works on either.
 
-```javascript
-// Basic usage with spinner
-const completedVideo = await api.waitForVideo('video_abc123');
+### `streamImageEdit(params)` / `generateImageEditStream(params, handlers?)`
 
-// With custom options
-const video = await api.waitForVideo('video_abc123', {
-  interval: 5000,    // Poll every 5 seconds
-  timeout: 600000,   // 10 minute timeout
-  showSpinner: true  // Show progress spinner
-});
+Edit counterparts; events are `image_edit.partial_image` / `image_edit.completed`.
 
-// With cancellation support
-const controller = new AbortController();
-setTimeout(() => controller.abort(), 30000); // Cancel after 30s
+### `saveImages(response, outputDir, baseFilename, format?): Promise<string[]>`
 
-try {
-  const video = await api.waitForVideo('video_abc123', {
-    signal: controller.signal
-  });
-} catch (error) {
-  if (error.message.includes('cancelled')) {
-    console.log('Video generation was cancelled');
+Decodes each `b64_json` entry to `<outputDir>/<baseFilename>.<format>` (numbered `_1`, `_2`… when `n > 1`). `format` defaults to `response.output_format`, then `png`.
+
+## Streaming
+
+Streaming uses `stream: true` on the same endpoints; the API answers with Server-Sent Events. This package parses them and exposes both an async generator and a callback wrapper.
+
+```typescript
+for await (const event of api.streamImage({ prompt: 'a storm', partial_images: 3 })) {
+  if (event.type === 'image_generation.partial_image') {
+    fs.writeFileSync(`partial-${event.partial_image_index}.png`, Buffer.from(event.b64_json, 'base64'));
+  } else {
+    fs.writeFileSync('final.png', Buffer.from(event.b64_json, 'base64'));
+    console.log(event.usage);
   }
 }
 ```
 
-#### `listVideos(options)`
+Things the API documents that are worth knowing before relying on partials:
 
-List all video generation jobs.
-
-```javascript
-const videos = await api.listVideos({ limit: 10 });
-videos.data.forEach(video => {
-  console.log(`${video.id}: ${video.status} (${video.progress}%)`);
-});
-```
-
-#### `deleteVideo(videoId)`
-
-Delete a video generation job.
-
-```javascript
-await api.deleteVideo('video_abc123');
-console.log('Video deleted');
-```
-
-#### `remixVideo(videoId, newPrompt, model)`
-
-Remix an existing video with a new prompt.
-
-```typescript
-const remixedJob = await api.remixVideo(
-  'video_abc123',
-  'make it more dramatic with lightning',
-  'sora-2'
-);
-
-const remixed = await api.waitForVideo(remixedJob.id);
-console.log('Remixed video ready:', remixed);
-```
-
-#### `downloadVideoContent(videoId, variant?)`
-
-Download video content as a Buffer.
-
-**Parameters:**
-- `videoId` - Video ID to download (required)
-- `variant` - Content variant: `'video'`, `'thumbnail'`, or `'spritesheet'` (default: `'video'`)
-
-**Returns:** `Promise<Buffer>` containing video/image data
-
-```typescript
-import { writeFile } from 'fs/promises';
-
-const completedVideo = await api.waitForVideo('video_abc123');
-
-// Download the video
-const videoBuffer = await api.downloadVideoContent(completedVideo.id);
-await writeFile('output.mp4', videoBuffer);
-
-// Or download thumbnail
-const thumbnail = await api.downloadVideoContent(completedVideo.id, 'thumbnail');
-await writeFile('thumbnail.jpg', thumbnail);
-
-// Or download spritesheet
-const spritesheet = await api.downloadVideoContent(completedVideo.id, 'spritesheet');
-await writeFile('spritesheet.jpg', spritesheet);
-```
-
-#### `createAndPoll(params, pollOptions?)`
-
-Create video and automatically poll for completion. Convenience method that combines `createVideo()` and `waitForVideo()`.
-
-**Parameters:**
-- `params` - Same as `createVideo()` parameters
-- `pollOptions` - Same as `waitForVideo()` options (interval, timeout, showSpinner)
-
-**Returns:** `Promise<VideoObject>` - Completed video object
-
-```typescript
-// Create and wait in one call
-const completedVideo = await api.createAndPoll({
-  prompt: 'a serene mountain lake at dawn',
-  model: 'sora-2',
-  seconds: '8'
-}, {
-  showSpinner: true  // Show progress spinner
-});
-
-// Video is ready, download it
-const buffer = await api.downloadVideoContent(completedVideo.id);
-```
+- Each partial frame costs an additional 100 image output tokens.
+- **You may receive fewer partials than requested** — "the final image may be sent before the full number of partial images are generated if the full image is generated more quickly." In testing, `low` quality at 1024x1024 frequently delivered zero partials; `medium` delivered one of two requested. Write consumers that treat partials as optional.
+- Partial and final payloads are large (a `medium` 1024x1024 PNG is ~3 MB of base64 per event); the parser buffers per event, not per line.
 
 ## Examples
 
-### Example 1: Basic Text-to-Image with DALL-E 3
+### Example 1: Highest quality Sunburst render
 
 ```bash
-npm run openai -- --dalle-3 \
-  --prompt "a serene mountain landscape at sunset" \
-  --size 1024x1024 \
-  --quality hd \
-  --style vivid
+openai-img --sunburst --prompt "photorealistic portrait of an astronaut" --size 1024x1536 --quality max
 ```
 
-### Example 2: GPT Image 1 with Transparent Background
+### Example 2: 4K landscape with gpt-image-2
 
 ```bash
-npm run openai -- --gpt-image-1 \
-  --prompt "a cute robot character" \
-  --background transparent \
-  --output-format png \
-  --quality high
+openai-img --gpt-image-2 --prompt "wide cinematic desert vista" --size 3840x2160 --quality high
 ```
 
-### Example 3: DALL-E 2 Image Editing
+### Example 3: Transparent background as WebP
 
 ```bash
-npm run openai -- --dalle-2 --edit \
-  --image photo.png \
-  --mask mask.png \
-  --prompt "add snow and winter atmosphere" \
-  --size 1024x1024
+openai-img --prompt "a cute robot character, sticker style" --background transparent --output-format webp
 ```
 
-### Example 4: GPT Image 1 Multi-Image Editing
+### Example 4: Streaming with partial frames
 
 ```bash
-npm run openai -- --gpt-image-1 --edit \
-  --image image1.png \
-  --image image2.png \
-  --image image3.png \
-  --prompt "combine these into a collage" \
-  --input-fidelity high
+openai-img --stream --partial-images 2 --quality medium --prompt "a lighthouse in a storm"
+# → ..._partial_0.png (if delivered), ..._lighthouse.png, ..._metadata.json
 ```
 
-### Example 5: DALL-E 2 Image Variations
+### Example 5: Multi-image edit
 
 ```bash
-npm run openai -- --dalle-2 --variation \
-  --image original.png \
-  --n 4 \
-  --size 1024x1024
+openai-img --sunburst --edit --image lotion.png --image soap.png --image candle.png \
+  --prompt "arrange these in a gift basket"
 ```
 
-### Example 6: Batch Generation
+### Example 6: Batch generation
 
 ```bash
-npm run openai -- --dalle-3 \
-  --prompt "a red apple" \
-  --prompt "a green pear" \
-  --prompt "a yellow banana" \
-  --quality hd
+openai-img --prompt "a red apple" --prompt "a green pear" --prompt "a yellow banana"
 ```
 
-### Example 7: Using API Class in Code
+### Example 7: Programmatic edit with streaming
 
 ```typescript
 import { OpenAIImageAPI } from 'openai-image-api';
 
-const api = new OpenAIImageAPI();
+const api = new OpenAIImageAPI({ logLevel: 'WARNING' });
 
-// Generate with DALL-E 3
-const result = await api.generateImage({
-  prompt: 'cinematic landscape',
-  model: 'dall-e-3',
-  size: '1792x1024',
-  quality: 'hd',
-  style: 'vivid'
-});
-
-// Save images
-const savedPaths = await api.saveImages(
-  result,
-  './output/dalle-3',
-  'landscape',
-  'png'
+const edited = await api.generateImageEditStream(
+  {
+    image: 'photo.png',
+    prompt: 'make it look like autumn',
+    model: 'gpt-image-2.5-sunburst',
+    partial_images: 1,
+  },
+  {
+    onPartialImage: async (e) => {
+      await fs.promises.writeFile(`preview-${e.partial_image_index}.png`, Buffer.from(e.b64_json, 'base64'));
+    },
+  }
 );
 
-console.log('Generated images:', savedPaths);
-```
-
-### Example 8: Basic Video Generation with Sora 2
-
-```bash
-npm run openai -- --video --sora-2 \
-  --prompt "a cat sitting on a windowsill watching the rain" \
-  --seconds 4 \
-  --size 1280x720
-```
-
-### Example 9: Image-to-Video with Reference Image
-
-```bash
-npm run openai -- --video --sora-2 \
-  --prompt "animate this scene with gentle waves" \
-  --input-reference beach-photo.jpg \
-  --seconds 8 \
-  --size 1920x1080
-```
-
-### Example 10: High-Quality Video with Sora 2 Pro
-
-```bash
-npm run openai -- --video --sora-2-pro \
-  --prompt "cinematic aerial view of mountains at sunrise" \
-  --seconds 12 \
-  --size 1920x1080
-```
-
-### Example 11: List and Manage Videos
-
-```bash
-# List all videos
-npm run openai:list-videos
-
-# Delete a specific video
-npm run openai -- --delete-video video_abc123
-
-# Remix an existing video
-npm run openai -- --video --sora-2 \
-  --remix-video video_abc123 \
-  --prompt "add dramatic lightning effects"
-```
-
-### Example 12: Using Video API in Code
-
-```typescript
-import { OpenAIVideoAPI } from 'openai-image-api/video-api';
-import { writeFile } from 'fs/promises';
-
-const api = new OpenAIVideoAPI();
-
-// Create video
-const videoJob = await api.createVideo({
-  prompt: 'a serene mountain lake at dawn',
-  model: 'sora-2',
-  size: '1920x1080',
-  seconds: '8'
-});
-
-console.log('Video job created:', videoJob.id);
-
-// Wait for completion with progress tracking
-const completedVideo = await api.waitForVideo(videoJob.id);
-
-console.log('Video ready!');
-console.log('Video ID:', completedVideo.id);
-console.log('Status:', completedVideo.status);
-console.log('Duration:', completedVideo.seconds, 'seconds');
-
-// Download the video content
-const videoBuffer = await api.downloadVideoContent(completedVideo.id);
-await writeFile('output.mp4', videoBuffer);
-console.log('Video saved:', videoBuffer.length, 'bytes');
+const [path] = await api.saveImages(edited, './out', 'autumn');
+console.log(path, edited.usage);
 ```
 
 ## Data Organization
 
-Generated images/videos and metadata are organized by model:
+Generated images and metadata are organized by model:
 
 ```
 datasets/
 └── openai/
-    ├── dalle-2/
-    │   ├── 2025-01-13_143022_dalle-2_mountain_landscape.png
-    │   ├── 2025-01-13_143022_dalle-2_mountain_landscape_metadata.json
+    ├── gpt-image-2.5-flare/
+    │   ├── 2026-09-20_22-37-00_gpt-image-2.5-flare_a_lighthouse_partial_0.png
+    │   ├── 2026-09-20_22-37-00_gpt-image-2.5-flare_a_lighthouse.png
+    │   ├── 2026-09-20_22-37-00_gpt-image-2.5-flare_a_lighthouse_metadata.json
     │   └── ...
-    ├── dalle-3/
-    │   └── ...
-    ├── gpt-image-1/
-    │   └── ...
-    ├── sora-2/
-    │   ├── 2025-11-20_04-28-05_sora-2_a_cat_sitting_on_a_windowsill_watching_t.mp4
-    │   ├── 2025-11-20_04-28-05_sora-2_a_cat_sitting_on_a_windowsill_watching_t.json
-    │   └── ...
-    └── sora-2-pro/
+    ├── gpt-image-2.5-sunburst/
+    │   └── 2026-09-20_22-38-19_gpt-image-2.5-sunburst-edit_make_the_fox_blue.png
+    └── gpt-image-2/
         └── ...
 ```
 
-**Image Metadata Format:**
+Partial frames, the final image, and the metadata sidecar for one request share a timestamp stem so they sort together.
+
+**Metadata Format:**
 
 ```json
 {
-  "model": "dall-e-3",
+  "model": "gpt-image-2.5-flare",
   "operation": "generate",
-  "timestamp": "2025-01-13T14:30:22Z",
+  "timestamp": "2026-09-20T22:37:11.223Z",
   "parameters": {
-    "prompt": "a serene mountain landscape",
+    "model": "gpt-image-2.5-flare",
     "size": "1024x1024",
-    "quality": "hd",
-    "style": "vivid"
+    "quality": "medium",
+    "partial_images": 2,
+    "prompt": "a detailed watercolor of a lighthouse in a storm"
   },
   "response": {
-    "created": 1234567890,
-    "images": ["datasets/openai/dalle-3/..."],
+    "created": 1789943831,
+    "images": ["datasets/openai/gpt-image-2.5-flare/..._a_lighthouse.png"],
+    "partial_images": ["datasets/openai/gpt-image-2.5-flare/..._a_lighthouse_partial_0.png"],
     "usage": {
-      "total_tokens": 100
-    }
+      "input_tokens": 15,
+      "input_tokens_details": { "image_tokens": 0, "text_tokens": 15 },
+      "output_tokens": 516,
+      "output_tokens_details": { "image_tokens": 516, "text_tokens": 0 },
+      "total_tokens": 531
+    },
+    "output_format": "png",
+    "quality": "medium",
+    "size": "1024x1024",
+    "background": "opaque"
   }
-}
-```
-
-**Video Metadata Format:**
-
-```json
-{
-  "id": "video_abc123",
-  "object": "video",
-  "created_at": 1763612808,
-  "status": "completed",
-  "model": "sora-2",
-  "progress": 100,
-  "seconds": "4",
-  "size": "1280x720",
-  "prompt": "a cat sitting on a windowsill watching the rain",
-  "remixed_from_video_id": null,
-  "error": null,
-  "timestamp": "2025-11-20T04:28:05.911Z"
 }
 ```
 
 ## Testing
 
-### Run Tests
-
 ```bash
-cd openai-api
-
-# Run all tests
-npm test
-
-# Watch mode for development
+npm test                # run all tests
 npm run test:watch
-
-# Interactive UI
 npm run test:ui
-
-# Generate coverage report
 npm run test:coverage
 ```
 
-### Test Coverage
+The suite has 160 tests across three files:
 
-The test suite includes 207 tests covering:
+- **config** — model catalogue and deprecation table, flexible-size rules (multiples of 16, aspect ratio, pixel bounds), per-model quality gating, `input_fidelity` rejection, cross-field rules (transparent+jpeg, compression without jpeg/webp), snapshot resolution.
+- **api** — request payloads per model family, default model, deprecation warning once per model, streaming (SSE reassembly across chunk boundaries, event ordering, callback wrapper, error-body recovery from a failed stream, terminal error events), edit pre-flight, `saveImages`, security (HTTPS enforcement, key redaction, production error sanitisation, rate limiting).
+- **utils** — file I/O, filename generation, SSRF-safe URL validation with DNS rebinding and IPv4-mapped-IPv6 checks, image magic-byte validation, path traversal, SSE parser edge cases (CRLF, multi-line data, comments, trailing event, 200 kB payloads).
 
-**Image API (128 tests):**
-- API authentication and key validation
-- All three generation methods (generate, edit, variation)
-- All three models (DALL-E 2, DALL-E 3, GPT Image 1)
-- Parameter validation for each model
-- Error handling scenarios
-- Utility functions (file I/O, image conversion, filename generation)
-- Configuration management
-
-**Video API (116 tests):**
-- Video creation (text-to-video, image-to-video)
-- Video retrieval and polling with progress tracking
-- Video listing, deletion, and remixing
-- Request cancellation with AbortController
-- Parameter validation for Sora models
-- Error handling and retry logic
-- Security features (HTTPS enforcement, API key redaction)
-- Utility functions (polling, file I/O, metadata storage)
+Network calls are mocked. Live verification of streaming, editing, and the `input_fidelity` behaviour was performed against the real API on 2026-09-20 during the 3.0.0 work; it is not part of `npm test`.
 
 ## Error Handling
 
-### Common Errors
+| Error | Meaning |
+|---|---|
+| `Authentication failed. Please check your API key.` | 401 |
+| `Bad request: <API message>` | 400 — the API's own message is passed through (sanitised to a generic string when `NODE_ENV=production`) |
+| `Rate limit exceeded. Please try again later.` | 429 |
+| `OpenAI service error. Please try again later.` | 500 / 502 / 503 |
+| `Parameter validation failed:\n  - ...` | Rejected client-side before any request; lists every failing rule |
+| `Stream error: <message>` | The API sent a terminal `error` event mid-stream |
+| `Stream ended without an image_generation.completed event` | Connection closed early |
 
-#### Authentication Failed (401)
-
-```
-Error: Authentication failed. Please check your API key.
-```
-
-**Solution:** Verify your API key is correct in `.env` or environment variable.
-
-#### Bad Request (400)
-
-```
-Error: Bad request: Invalid parameters
-```
-
-**Solution:** Check parameter validation errors. Common issues:
-- Invalid size for the model
-- Prompt too long for the model
-- Invalid quality/style options
-- n > 1 for DALL-E 3
-
-#### Rate Limit (429)
-
-```
-Error: Rate limit exceeded. Please try again later.
-```
-
-**Solution:** Wait and retry. Consider reducing request frequency.
-
-#### Parameter Validation
+Example validation failure:
 
 ```
 Error: Parameter validation failed:
-  - Invalid size "2048x2048" for dall-e-2. Valid sizes: 256x256, 512x512, 1024x1024
+  - Size "1000x1000": width and height must both be multiples of 16
+  - Invalid quality "max" for gpt-image-2. Valid options: auto, low, medium, high
 ```
-
-**Solution:** Use valid parameters for the selected model. Check model constraints in documentation.
 
 ## Troubleshooting
 
 ### API Key Not Found
+Set `OPENAI_API_KEY` via one of the four methods in [Authentication Setup](#authentication-setup).
 
-```
-Error: OPENAI_API_KEY not found
-```
+### `does not support the 'input_fidelity' parameter`
+You're editing with gpt-image-2 or a 2.5 model. Drop `--input-fidelity`; these models always use high fidelity. The client-side validator catches this before the request when the model is known.
 
-**Solution:** Create `.env` file with your API key:
-```bash
-OPENAI_API_KEY=your_api_key_here
-```
+### Requests time out
+Default timeout is 180 s. `max` quality at large sizes can exceed that; raise `requestTimeout` in `APIOptions`.
 
-### Module Not Found
+### Organization Not Verified
+A 400 mentioning verification means your org must complete [API Organization Verification](https://help.openai.com/en/articles/10910291-api-organization-verification).
 
-```
-Error: Cannot find module 'axios'
-```
+### Model returns 404
+`dall-e-2`, `dall-e-3` (since 2026-05-12) and, after their dates, `gpt-image-1` (2026-10-23), `gpt-image-1.5` / `gpt-image-1-mini` (2026-12-01) are removed from the API. Migrate to `gpt-image-2` or a 2.5 model.
 
-**Solution:** Install dependencies:
-```bash
-cd openai-api
-npm install
-```
+## Migrating from 2.x
 
-### Model Not Supported
+3.0.0 is a breaking release. Everything removed was removed because OpenAI shut down or scheduled shutdown of the underlying API:
 
-```
-Error: Model dall-e-3 does not support image editing
-```
+| Removed | Why | Replacement |
+|---|---|---|
+| `dall-e-2`, `dall-e-3` models | Shut down 2026-05-12 | `gpt-image-2.5-flare` (new default) or any GPT Image model |
+| `generateImageVariation()`, `--variation` | `/v1/images/variations` was DALL-E-2-only | Use an edit with a descriptive prompt |
+| `response_format`, `style`, `url` in responses | DALL-E-only fields; GPT Image always returns base64 | `data[i].b64_json` |
+| `OpenAIVideoAPI`, `openai-image-api/video-api`, `--video`, `--sora-2`, `--sora-2-pro`, `--remix-video`, `--list-videos`, `--delete-video`, `--seconds`, `--input-image`, `--variant` | Videos API and Sora 2 shut down 2026-09-24 | — |
+| `--dalle-2`, `--dalle-3` flags | as above | `--flare`, `--sunburst`, `--gpt-image-2`, `--model <id>` |
+| 30 s request timeout | Too short for image generation | 180 s default, `requestTimeout` option |
 
-**Solution:** Use DALL-E 2 or GPT Image 1 for editing operations.
+Other behaviour changes:
 
-### Organization Not Verified (GPT Image 1)
-
-```
-Error: Bad request: Invalid parameters (400)
-```
-
-If you're trying to use GPT Image 1 and receiving a 400-level error despite valid parameters, your organization likely needs verification.
-
-**Solution:** Complete the organization verification process:
-1. Visit [OpenAI Organization Settings](https://platform.openai.com/settings/organization/general)
-2. Complete KYC verification with ID and selfie
-3. Wait for approval (usually a few business days)
-4. Retry your request after verification is complete
-
-See [Organization Verification](#organization-verification) for more details.
-
-## Development Scripts
-
-**Image Generation:**
-```bash
-npm run openai              # Run CLI
-npm run openai:help         # Show help
-npm run openai:examples     # Show usage examples
-npm run openai:dalle2       # Use DALL-E 2
-npm run openai:dalle3       # Use DALL-E 3
-npm run openai:gpt-image    # Use GPT Image 1
-```
-
-**Video Generation:**
-```bash
-npm run openai:sora-2       # Use Sora 2
-npm run openai:sora-2-pro   # Use Sora 2 Pro
-npm run openai:list-videos  # List all videos
-```
-
-Pass additional flags with `--`:
-
-```bash
-npm run openai:dalle3 -- --prompt "a cat" --quality hd
-npm run openai:sora-2 -- --prompt "a cat on a windowsill" --seconds 4
-```
-
-## Model Comparison
-
-### Image Models
-
-| Feature | DALL-E 2 | DALL-E 3 | GPT Image 1 | GPT Image 1.5 |
-|---------|----------|----------|-------------|---------------|
-| Text-to-Image | ✓ | ✓ | ✓ | ✓ |
-| Image Editing | ✓ | ✗ | ✓ | ✓ |
-| Image Variations | ✓ | ✗ | ✗ | ✗ |
-| Max Images (n) | 10 | 1 | 10 | 10 |
-| HD Quality | ✗ | ✓ | ✓ | ✓ |
-| Styles | ✗ | vivid/natural | ✗ | ✗ |
-| Transparent BG | ✗ | ✗ | ✓ | ✓ |
-| Multi-image Edit | ✗ | ✗ | ✓ (16 images) | ✓ (16 images) |
-| Compression Control | ✗ | ✗ | ✓ | ✓ |
-| Partial Images | ✗ | ✗ | ✗ | ✓ (0-3) |
-| Output Formats | PNG | PNG | PNG/JPEG/WebP | PNG/JPEG/WebP |
-
-### Video Models
-
-| Feature | Sora 2 | Sora 2 Pro |
-|---------|--------|------------|
-| Text-to-Video | ✓ | ✓ |
-| Image-to-Video | ✓ | ✓ |
-| Video Remixing | ✓ | ✓ |
-| Max Duration | 12s | 12s |
-| Resolutions | 720p, 1080p, portrait | 720p, 1080p, portrait |
-| Quality | Standard | Enhanced |
-| Async Processing | ✓ | ✓ |
-| Progress Tracking | ✓ | ✓ |
-| Cancellation | ✓ | ✓ |
+- **Default model** is `gpt-image-2.5-flare`, not `dall-e-2`.
+- **`gpt-image-1.5` now actually works.** In 2.1.x its options were gated on `model === 'gpt-image-1'`, so 1.5 requests carried `response_format` (a 400) and silently dropped `background`/`output_format`/`moderation`/`input_fidelity`. All GPT Image models now share one code path.
+- **Streaming exists.** The 2.1.0 changelog announced partial-image streaming; only a constraints entry shipped. `streamImage`, `generateImageStream`, `streamImageEdit`, `generateImageEditStream`, and `--stream` are new in 3.0.0.
+- **`--dry-run` validates.** Previously it printed parameters and declared them valid without checking.
+- **`saveImages` `format` is optional** and defaults to the response's `output_format`.
+- **Output directories** are named by the full model id (`datasets/openai/gpt-image-2.5-flare/`), not a shortened alias.
+- New client-side rules: `background: transparent` with `output_format: jpeg` and `output_compression` without jpeg/webp are rejected before the request.
 
 ## Additional Resources
 
-- [OpenAI Image API Documentation](https://platform.openai.com/docs/api-reference/images)
-- [OpenAI Video API Documentation](https://platform.openai.com/docs/api-reference/video)
+- [OpenAI Image API Reference](https://developers.openai.com/api/reference/resources/images)
+- [Image Generation Guide](https://developers.openai.com/api/docs/guides/image-generation)
+- [Model Deprecations](https://developers.openai.com/api/docs/deprecations)
 - [OpenAI Platform](https://platform.openai.com/)
-- [Image Generation Guide](https://platform.openai.com/docs/guides/images)
 
 ## Related Packages
 
@@ -1173,11 +604,3 @@ This package is part of the img-gen ecosystem. Check out these other AI generati
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
----
-
-**Note:** This service implements:
-- **Image Generation**: All three endpoints (create, edit, variation) for DALL-E 2, DALL-E 3, and GPT Image 1
-- **Video Generation**: Complete Sora API integration with text-to-video, image-to-video, remixing, and async polling
-- **Security**: SSRF protection, input validation, API key redaction, and error sanitization
-- **Reliability**: 207 tests, parameter validation, and automatic retry with exponential backoff

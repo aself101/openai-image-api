@@ -1,22 +1,18 @@
 #!/usr/bin/env node
 /**
- * OpenAI Image & Video Generation - Main CLI Script
+ * OpenAI Image Generation - Main CLI Script
  *
- * Command-line tool for generating, editing, and creating variations of images
- * using OpenAI's image generation API (DALL-E 2, DALL-E 3, GPT Image 1),
- * and generating videos using Sora (Sora 2, Sora 2 Pro).
+ * Command-line tool for generating and editing images with OpenAI's GPT Image
+ * models (gpt-image-2.5-sunburst, gpt-image-2.5-flare, gpt-image-2, and the
+ * deprecated gpt-image-1.5 / gpt-image-1 / gpt-image-1-mini).
  *
- * Image Usage:
- *   openai-img --dalle-3 --prompt "a cat" --size 1024x1024
- *   openai-img --gpt-image-1 --prompt "landscape" --background transparent
- *   openai-img --dalle-2 --edit --image photo.png --prompt "add a hat"
- *   openai-img --dalle-2 --variation --image photo.png --n 3
- *
- * Video Usage:
- *   openai-img --video --sora-2 --prompt "a cat on a motorcycle" --seconds 8
- *   openai-img --video --sora-2-pro --input-image frame.jpg --prompt "she walks away"
- *   openai-img --remix-video video_123 --prompt "change to teal colors"
- *   openai-img --list-videos --limit 20
+ * Usage:
+ *   openai-img --prompt "a cat"                              # default: gpt-image-2.5-flare
+ *   openai-img --sunburst --prompt "a cat" --quality max
+ *   openai-img --gpt-image-2 --prompt "a poster" --size 2048x1152
+ *   openai-img --edit --image photo.png --prompt "add a hat"
+ *   openai-img --stream --partial-images 2 --prompt "a river of feathers"
+ *   openai-img --model gpt-image-2.5-flare-2026-09-08 --prompt "pinned snapshot"
  */
 export {};
 //# sourceMappingURL=cli.d.ts.map

@@ -1,30 +1,26 @@
 #!/usr/bin/env node
 /**
- * OpenAI Image & Video Generation - Main CLI Script
+ * OpenAI Image Generation - Main CLI Script
  *
- * Command-line tool for generating, editing, and creating variations of images
- * using OpenAI's image generation API (DALL-E 2, DALL-E 3, GPT Image 1),
- * and generating videos using Sora (Sora 2, Sora 2 Pro).
+ * Command-line tool for generating and editing images with OpenAI's GPT Image
+ * models (gpt-image-2.5-sunburst, gpt-image-2.5-flare, gpt-image-2, and the
+ * deprecated gpt-image-1.5 / gpt-image-1 / gpt-image-1-mini).
  *
- * Image Usage:
- *   openai-img --dalle-3 --prompt "a cat" --size 1024x1024
- *   openai-img --gpt-image-1 --prompt "landscape" --background transparent
- *   openai-img --dalle-2 --edit --image photo.png --prompt "add a hat"
- *   openai-img --dalle-2 --variation --image photo.png --n 3
- *
- * Video Usage:
- *   openai-img --video --sora-2 --prompt "a cat on a motorcycle" --seconds 8
- *   openai-img --video --sora-2-pro --input-image frame.jpg --prompt "she walks away"
- *   openai-img --remix-video video_123 --prompt "change to teal colors"
- *   openai-img --list-videos --limit 20
+ * Usage:
+ *   openai-img --prompt "a cat"                              # default: gpt-image-2.5-flare
+ *   openai-img --sunburst --prompt "a cat" --quality max
+ *   openai-img --gpt-image-2 --prompt "a poster" --size 2048x1152
+ *   openai-img --edit --image photo.png --prompt "add a hat"
+ *   openai-img --stream --partial-images 2 --prompt "a river of feathers"
+ *   openai-img --model gpt-image-2.5-flare-2026-09-08 --prompt "pinned snapshot"
  */
 import { Command } from 'commander';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
-import { OpenAIImageAPI, OpenAIVideoAPI } from './api.js';
-import { generateTimestampedFilename, generateVideoFilename, writeToFile, ensureDirectory, setLogLevel, createSpinner, logger, saveVideoFile, saveVideoMetadata, validateOutputPath, } from './utils.js';
-import { getOutputDir, getModelConstraints, MODELS, VIDEO_MODELS } from './config.js';
+import { OpenAIImageAPI } from './api.js';
+import { generateTimestampedFilename, writeToFile, ensureDirectory, setLogLevel, createSpinner, logger, decodeBase64Image, validateOutputPath, } from './utils.js';
+import { getOutputDir, getModelConstraints, getModelDeprecation, isSupportedModel, validateModelParams, MODELS, DEFAULT_MODEL, } from './config.js';
 // ES module dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,351 +36,225 @@ ${'='.repeat(70)}
 OPENAI IMAGE GENERATION - USAGE EXAMPLES
 ${'='.repeat(70)}
 
-1. DALL-E 2 - Basic text-to-image
-   $ openai-img --dalle-2 \\
-       --prompt "a serene mountain landscape at sunset" \\
-       --size 1024x1024 \\
-       --n 2
+1. Default model (gpt-image-2.5-flare) - basic text-to-image
+   $ openai-img --prompt "a serene mountain landscape at sunset"
 
-2. DALL-E 3 - High quality with style
-   $ openai-img --dalle-3 \\
+2. Sunburst - precise, high-quality render
+   $ openai-img --sunburst \\
        --prompt "photorealistic portrait of an astronaut" \\
-       --size 1024x1792 \\
-       --quality hd \\
-       --style vivid
+       --size 1024x1536 \\
+       --quality max
 
-3. DALL-E 3 - Natural style
-   $ openai-img --dalle-3 \\
-       --prompt "minimalist interior design" \\
-       --style natural \\
-       --size 1792x1024
-
-4. GPT Image 1 - Advanced text-to-image with transparent background
-   $ openai-img --gpt-image-1 \\
-       --prompt "a cute robot character" \\
-       --background transparent \\
-       --output-format png \\
+3. Flexible sizes (gpt-image-2 and 2.5) - 2K landscape
+   $ openai-img --gpt-image-2 \\
+       --prompt "wide cinematic desert vista" \\
+       --size 2048x1152 \\
        --quality high
 
-5. GPT Image 1 - Multiple sizes and compression
-   $ openai-img --gpt-image-1 \\
+4. Transparent background (png or webp only)
+   $ openai-img --flare \\
+       --prompt "a cute robot character" \\
+       --background transparent \\
+       --output-format png
+
+5. Compressed webp output
+   $ openai-img --flare \\
        --prompt "abstract digital art" \\
-       --size 1536x1024 \\
        --output-format webp \\
        --output-compression 85 \\
        --quality medium
 
-6. DALL-E 2 - Image editing with mask
-   $ openai-img --dalle-2 --edit \\
+6. Streaming with partial images
+   $ openai-img --stream --partial-images 2 \\
+       --prompt "a river made of white owl feathers, winter landscape"
+
+7. Image editing with a mask
+   $ openai-img --edit \\
        --image photo.png \\
        --mask mask.png \\
-       --prompt "add snow and winter atmosphere" \\
-       --size 1024x1024
+       --prompt "add snow and winter atmosphere"
 
-7. GPT Image 1 - Multi-image editing
-   $ openai-img --gpt-image-1 --edit \\
+8. Multi-image editing (up to 16 inputs)
+   $ openai-img --sunburst --edit \\
        --image image1.png \\
        --image image2.png \\
        --image image3.png \\
-       --prompt "combine these into a collage" \\
-       --input-fidelity high
-
-8. DALL-E 2 - Image variations
-   $ openai-img --dalle-2 --variation \\
-       --image original.png \\
-       --n 4 \\
-       --size 1024x1024
+       --prompt "combine these into a collage"
 
 9. Batch generation with multiple prompts
-   $ openai-img --dalle-3 \\
+   $ openai-img \\
        --prompt "a red apple" \\
        --prompt "a green pear" \\
-       --prompt "a yellow banana" \\
-       --quality hd
+       --prompt "a yellow banana"
 
-10. GPT Image 1 - Low moderation for artistic freedom
-    $ openai-img --gpt-image-1 \\
+10. Low moderation
+    $ openai-img --flare \\
         --prompt "surreal artistic scene" \\
-        --moderation low \\
-        --quality high \\
-        --size 1536x1024
+        --moderation low
 
 11. Save to custom directory
-    $ openai-img --dalle-3 \\
+    $ openai-img \\
         --prompt "sunset over ocean" \\
-        --output-dir ./my-images \\
-        --quality hd
+        --output-dir ./my-images
 
-12. Generate with specific response format (URL vs base64)
-    $ openai-img --dalle-2 \\
-        --prompt "cityscape at night" \\
-        --response-format url
-
-${'='.repeat(70)}
-VIDEO GENERATION (SORA)
-${'='.repeat(70)}
-
-13. Sora 2 - Basic text-to-video
-    $ openai-img --video --sora-2 \\
-        --prompt "a cat riding a motorcycle through the night" \\
-        --seconds 8 \\
-        --size 1280x720
-
-14. Sora 2 Pro - High quality video with reference image
-    $ openai-img --video --sora-2-pro \\
-        --input-image first_frame.jpg \\
-        --prompt "she turns around and smiles, then walks away" \\
-        --seconds 12 \\
-        --size 1792x1024
-
-15. Remix existing video
-    $ openai-img --remix-video video_abc123 \\
-        --prompt "change the color palette to teal and rust"
-
-16. List your video library
-    $ openai-img --list-videos --limit 20 --order desc
-
-17. Delete a video
-    $ openai-img --delete-video video_abc123
-
-18. Download video thumbnail
-    $ openai-img --video --sora-2 \\
-        --prompt "sunset over ocean waves" \\
-        --variant thumbnail
+12. Pin a dated snapshot
+    $ openai-img --model gpt-image-2.5-flare-2026-09-08 \\
+        --prompt "reproducible render"
 
 ${'='.repeat(70)}
 MODEL COMPARISON
 ${'='.repeat(70)}
 
-DALL-E 2:
-  - Sizes: 256x256, 512x512, 1024x1024
-  - Features: Basic generation, editing, variations
-  - Cost: Lower cost per image
-  - Speed: Faster generation
+gpt-image-2.5-sunburst:
+  - Sizes: 1024x1024, 1536x1024, 1024x1536, auto, or any WxH (see below)
+  - Quality: auto, low, medium, high, xhigh, max
+  - Best for: editing precision
 
-DALL-E 3:
-  - Sizes: 1024x1024, 1792x1024, 1024x1792
-  - Features: HD quality, vivid/natural styles
-  - Quality: Higher quality, more detailed
-  - Note: Only generates 1 image at a time (n=1)
+gpt-image-2.5-flare (default):
+  - Sizes: as Sunburst
+  - Quality: auto, low, medium, high, xhigh, max
+  - Best for: fast, high-quality everyday generation
 
-GPT Image 1:
+gpt-image-2:
+  - Sizes: as above; up to 3840x2160 (4K)
+  - Quality: auto, low, medium, high
+
+Note: input_fidelity is accepted by the gpt-image-1.x models only; gpt-image-2
+and the 2.5 models process inputs at high fidelity automatically.
+
+gpt-image-1.5, gpt-image-1, gpt-image-1-mini (deprecated):
   - Sizes: 1024x1024, 1536x1024, 1024x1536, auto
-  - Features: Transparent backgrounds, multi-image editing, compression
-  - Advanced: Input fidelity, moderation control, multiple formats
-  - Note: Always returns base64-encoded images
+  - Quality: auto, low, medium, high
+  - Shutdown: gpt-image-1 on 2026-10-23; 1.5 and 1-mini on 2026-12-01
 
-Sora 2:
-  - Sizes: 720x1280, 1280x720, 1024x1792, 1792x1024
-  - Duration: 4, 8, or 12 seconds
-  - Features: Fast generation, text-to-video, image-to-video, remix
-  - Use case: Rapid iteration, social content, prototypes
-
-Sora 2 Pro:
-  - Sizes: 720x1280, 1280x720, 1024x1792, 1792x1024
-  - Duration: 4, 8, or 12 seconds
-  - Features: Production quality, text-to-video, image-to-video, remix
-  - Use case: High-resolution cinematic footage, marketing assets
+Flexible size rules (gpt-image-2 / 2.5):
+  - Width and height multiples of 16
+  - Aspect ratio between 1:3 and 3:1
+  - No edge above 3840px; total pixels 655,360 - 8,294,400
+  - Above 2560x1440 is experimental
 
 ${'='.repeat(70)}
 `);
 }
 /**
- * Handle video mode operations (Sora).
+ * Resolve the model from flags. `--model` wins over shortcut flags.
  */
-async function handleVideoMode(options) {
-    // Determine video model
-    let model = 'sora-2'; // default
-    if (options.sora2)
-        model = VIDEO_MODELS['sora-2'];
-    if (options.sora2Pro)
-        model = VIDEO_MODELS['sora-2-pro'];
-    // Initialize video API
-    const videoApi = new OpenAIVideoAPI({
-        apiKey: options.apiKey,
-        logLevel: options.logLevel,
-    });
-    // Determine output directory
-    let outputDir;
-    if (options.outputDir) {
-        // Validate user-provided output path for path traversal
-        outputDir = validateOutputPath(options.outputDir);
-    }
-    else {
-        outputDir = path.join(getOutputDir(), model);
-    }
-    await ensureDirectory(outputDir);
-    // Handle list videos
-    if (options.listVideos) {
-        logger.info(`\n${'='.repeat(60)}`);
-        logger.info('Listing videos');
-        logger.info(`${'='.repeat(60)}`);
-        const result = await videoApi.listVideos({
-            limit: options.limit || 20,
-            order: options.order || 'desc',
-        });
-        if (result.data && result.data.length > 0) {
-            logger.info(`\nFound ${result.data.length} video(s):\n`);
-            result.data.forEach((video) => {
-                logger.info(`  ID: ${video.id}`);
-                logger.info(`  Status: ${video.status}`);
-                logger.info(`  Model: ${video.model}`);
-                logger.info(`  Size: ${video.size}`);
-                logger.info(`  Duration: ${video.seconds}s`);
-                logger.info(`  Created: ${new Date(video.created_at * 1000).toISOString()}`);
-                if (video.prompt)
-                    logger.info(`  Prompt: "${video.prompt.substring(0, 60)}..."`);
-                logger.info('');
-            });
+function resolveModel(options) {
+    if (options.model) {
+        if (!isSupportedModel(options.model)) {
+            throw new Error(`Unsupported model "${options.model}". Supported: ${Object.values(MODELS).join(', ')} (and dated snapshots)`);
         }
-        else {
-            logger.info('\nNo videos found.');
-        }
-        return;
+        return options.model;
     }
-    // Handle delete video
-    if (options.deleteVideo) {
-        logger.info(`\n${'='.repeat(60)}`);
-        logger.info(`Deleting video: ${options.deleteVideo}`);
-        logger.info(`${'='.repeat(60)}`);
-        await videoApi.deleteVideo(options.deleteVideo);
-        logger.info(`\n✓ Video deleted: ${options.deleteVideo}`);
-        return;
+    if (options.sunburst)
+        return MODELS.sunburst;
+    if (options.flare)
+        return MODELS.flare;
+    if (options.gptImage2)
+        return MODELS['gpt-image-2'];
+    if (options.gptImage15)
+        return MODELS['gpt-image-1.5'];
+    if (options.gptImage1)
+        return MODELS['gpt-image-1'];
+    if (options.gptImage1Mini)
+        return MODELS['gpt-image-1-mini'];
+    return DEFAULT_MODEL;
+}
+/**
+ * Run the same validation the API class applies, so `--dry-run` reports what a
+ * real request would be rejected for instead of printing the parameters and
+ * declaring them valid. (Through 2.1.1 the dry-run path never validated.)
+ */
+function dryRun(model, params) {
+    const validation = validateModelParams(model, params);
+    if (!validation.valid) {
+        throw new Error(`Parameter validation failed:\n  - ${validation.errors.join('\n  - ')}`);
     }
-    // Handle remix video
-    if (options.remixVideo) {
-        const videoId = options.remixVideo;
-        const prompt = options.prompt[0];
-        if (!prompt) {
-            throw new Error('--prompt is required for remixing video');
-        }
-        logger.info(`\n${'='.repeat(60)}`);
-        logger.info(`Remixing video ${videoId}: "${prompt.substring(0, 50)}..."`);
-        logger.info(`${'='.repeat(60)}`);
-        // Create remix
-        const remixJob = await videoApi.remixVideo(videoId, prompt);
-        // Poll for completion
-        const video = await videoApi.waitForVideo(remixJob.id);
-        // Download video content
-        logger.info('Downloading video content...');
-        const buffer = await videoApi.downloadVideoContent(video.id, options.variant || 'video');
-        // Save video
-        const filename = generateVideoFilename(prompt, model, 'mp4');
-        const videoPath = path.join(outputDir, filename);
-        await saveVideoFile(buffer, videoPath);
-        // Save metadata
-        const metadataPath = videoPath.replace('.mp4', '.json');
-        await saveVideoMetadata(video, metadataPath);
-        logger.info(`\n✓ Success! Remixed video saved:`);
-        logger.info(`  - ${videoPath}`);
-        logger.info(`  - ${metadataPath}\n`);
-        return;
-    }
-    // Handle create video
-    if (options.prompt.length === 0) {
-        throw new Error('--prompt is required for video generation');
-    }
-    const prompt = options.prompt[0];
-    logger.info(`\n${'='.repeat(60)}`);
-    logger.info(`Generating video with ${model}: "${prompt.substring(0, 50)}..."`);
-    logger.info(`Output directory: ${outputDir}`);
-    logger.info(`${'='.repeat(60)}`);
-    // Build parameters
-    const params = {
-        prompt,
+    logger.info('Dry run - parameters validated successfully:');
+    logger.info(JSON.stringify(params, null, 2));
+}
+/**
+ * Persist images and a metadata sidecar for one completed request.
+ */
+async function persistResult(api, response, outputDir, model, operation, baseFilename, parameters, requestedFormat, partialPaths) {
+    const outputFormat = requestedFormat ?? response.output_format ?? 'png';
+    const savedPaths = await api.saveImages(response, outputDir, baseFilename, outputFormat);
+    const metadataPath = path.join(outputDir, `${baseFilename}_metadata.json`);
+    await writeToFile({
         model,
-        size: options.size,
-        seconds: options.seconds, // Keep as string - API expects "4", "8", or "12"
-        input_reference: options.inputImage,
+        operation,
+        timestamp: new Date().toISOString(),
+        parameters,
+        response: {
+            created: response.created,
+            images: savedPaths,
+            partial_images: partialPaths.length > 0 ? partialPaths : undefined,
+            usage: response.usage,
+            output_format: response.output_format,
+            quality: response.quality,
+            size: response.size,
+            background: response.background,
+        },
+    }, metadataPath);
+    return { savedPaths, metadataPath };
+}
+/**
+ * Filename stem for one request. Computed once so partial frames, the final
+ * image, and the metadata sidecar share a timestamp and sort together.
+ */
+function requestStem(prompt, tag) {
+    return generateTimestampedFilename(prompt, tag, 'png').replace(/\.png$/, '');
+}
+/**
+ * Build an onPartialImage handler that writes each frame beside the final image.
+ */
+function partialImageWriter(outputDir, stem, format, sink) {
+    return async (event) => {
+        const filepath = path.join(outputDir, `${stem}_partial_${event.partial_image_index}.${format}`);
+        await decodeBase64Image(event.b64_json, filepath);
+        sink.push(filepath);
+        logger.info(`  partial image ${event.partial_image_index} → ${filepath}`);
     };
-    if (options.inputImage) {
-        logger.info(`Using input reference image: ${options.inputImage}`);
-    }
-    if (options.dryRun) {
-        logger.info('Dry run - parameters validated successfully:');
-        logger.info(JSON.stringify(params, null, 2));
-        return;
-    }
-    // Create video and poll for completion
-    const video = await videoApi.createAndPoll(params);
-    // Download video content
-    const variant = options.variant || 'video';
-    logger.info(`Downloading ${variant} content...`);
-    const buffer = await videoApi.downloadVideoContent(video.id, variant);
-    // Determine file extension based on variant
-    let extension = 'mp4';
-    if (variant === 'thumbnail')
-        extension = 'webp';
-    if (variant === 'spritesheet')
-        extension = 'jpg';
-    // Save video/image
-    const filename = generateVideoFilename(prompt, model, extension);
-    const filePath = path.join(outputDir, filename);
-    await saveVideoFile(buffer, filePath);
-    // Save metadata
-    const metadataPath = filePath.replace(`.${extension}`, '.json');
-    await saveVideoMetadata(video, metadataPath);
-    logger.info(`\n✓ Success! Video saved:`);
-    logger.info(`  - ${filePath}`);
-    logger.info(`  - ${metadataPath}\n`);
 }
 /**
  * Parse and validate CLI arguments.
  */
 program
     .name('openai-img')
-    .description('OpenAI Image & Video Generation CLI - DALL-E, GPT Image, and Sora models')
+    .description('OpenAI Image Generation CLI - GPT Image models')
     .version(version);
-// Model selection (mutually exclusive)
+// Model selection
 program
-    .option('--dalle-2', 'Use DALL-E 2 model')
-    .option('--dalle-3', 'Use DALL-E 3 model')
-    .option('--gpt-image-1', 'Use GPT Image 1 model')
-    .option('--gpt-image-15', 'Use GPT Image 1.5 model');
-// Video model selection (mutually exclusive)
-program
-    .option('--sora-2', 'Use Sora 2 model (fast video generation)')
-    .option('--sora-2-pro', 'Use Sora 2 Pro model (high quality video)');
+    .option('--model <id>', 'Model identifier (canonical or dated snapshot); overrides shortcut flags')
+    .option('--sunburst', 'Use gpt-image-2.5-sunburst (editing precision)')
+    .option('--flare', 'Use gpt-image-2.5-flare (fast, high quality; default)')
+    .option('--gpt-image-2', 'Use gpt-image-2')
+    .option('--gpt-image-15', 'Use gpt-image-1.5 (deprecated, shutdown 2026-12-01)')
+    .option('--gpt-image-1', 'Use gpt-image-1 (deprecated, shutdown 2026-10-23)')
+    .option('--gpt-image-1-mini', 'Use gpt-image-1-mini (deprecated, shutdown 2026-12-01)');
 // Operation mode
 program
-    .option('--video', 'Enable video generation mode')
     .option('--edit', 'Edit existing image(s) with prompt')
-    .option('--variation', 'Create variations of existing image');
-// Video-specific operations
-program
-    .option('--remix-video <video_id>', 'Remix existing video with new prompt')
-    .option('--list-videos', 'List your video library')
-    .option('--delete-video <video_id>', 'Delete a video from storage')
-    .option('--limit <number>', 'Number of videos to list (default: 20)', parseInt)
-    .option('--order <order>', 'Sort order for list (asc or desc, default: desc)');
+    .option('--stream', 'Stream the response, saving partial images as they arrive')
+    .option('--partial-images <n>', 'Number of partial images to stream, 0-3 (requires --stream)', parseInt);
 // Common parameters
 program
-    .option('--prompt <text>', 'Text prompt (can specify multiple for batch)', (value, previous) => {
+    .option('--prompt <text>', 'Text prompt (can specify multiple for batch generation)', (value, previous) => {
     return previous ? [...previous, value] : [value];
 }, [])
-    .option('--image <path>', 'Input image path (can specify multiple for gpt-image-1)', (value, previous) => {
+    .option('--image <path>', 'Input image path for --edit (repeat for up to 16 images)', (value, previous) => {
     return previous ? [...previous, value] : [value];
 }, [])
     .option('--mask <path>', 'Mask image path for editing')
-    .option('--size <size>', 'Image size (e.g., 1024x1024)')
-    .option('--quality <quality>', 'Image quality (auto, low, medium, high for gpt-image-1; standard, hd for dalle-3)')
-    .option('--n <number>', 'Number of images to generate', parseInt)
-    .option('--response-format <format>', 'Response format: url or b64_json (dalle-2/3 only)')
-    .option('--user <id>', 'User identifier for monitoring');
-// DALL-E 3 specific
-program.option('--style <style>', 'Style: vivid or natural (dalle-3 only)');
-// GPT Image 1 specific
-program
-    .option('--background <bg>', 'Background: auto, transparent, or opaque (gpt-image-1 only)')
-    .option('--moderation <level>', 'Moderation: auto or low (gpt-image-1 only)')
-    .option('--output-format <format>', 'Output format: png, jpeg, or webp (gpt-image-1 only)')
-    .option('--output-compression <percent>', 'Compression 0-100 (gpt-image-1 only)', parseInt)
-    .option('--input-fidelity <level>', 'Input fidelity: high or low (gpt-image-1 edit only)');
-// Sora (video) specific
-program
-    .option('--seconds <duration>', 'Video duration in seconds: 4, 8, or 12 (sora only)')
-    .option('--input-image <path>', 'Reference image for first frame (sora only)')
-    .option('--variant <type>', 'Download variant: video, thumbnail, or spritesheet (default: video)');
+    .option('--size <size>', 'Image size: WIDTHxHEIGHT or auto (e.g. 1024x1024, 2048x1152)')
+    .option('--quality <quality>', 'Quality: auto, low, medium, high; xhigh, max on 2.5 models')
+    .option('--n <number>', 'Number of images to generate (1-10)', parseInt)
+    .option('--background <bg>', 'Background: auto, transparent, or opaque')
+    .option('--moderation <level>', 'Moderation: auto or low')
+    .option('--output-format <format>', 'Output format: png, jpeg, or webp')
+    .option('--output-compression <percent>', 'Compression 0-100 (jpeg/webp only)', parseInt)
+    .option('--input-fidelity <level>', 'Input fidelity for --edit: high or low (gpt-image-1.x only)')
+    .option('--user <id>', 'End-user identifier for abuse monitoring');
 // API and output configuration
 program
     .option('--api-key <key>', 'OpenAI API key (overrides environment variable)')
@@ -413,50 +283,25 @@ async function main() {
         if (options.logLevel) {
             setLogLevel(options.logLevel);
         }
-        // Detect video mode
-        const isVideoMode = options.video ||
-            options.sora2 ||
-            options.sora2Pro ||
-            options.remixVideo ||
-            options.listVideos ||
-            options.deleteVideo;
-        if (isVideoMode) {
-            // VIDEO MODE - handle Sora video operations
-            await handleVideoMode(options);
-            return;
-        }
-        // IMAGE MODE - handle DALL-E and GPT Image operations
-        // Determine model
-        let model = 'dall-e-2'; // default
-        if (options.dalle2)
-            model = MODELS['dalle-2'];
-        if (options.dalle3)
-            model = MODELS['dalle-3'];
-        if (options.gptImage1)
-            model = MODELS['gpt-image-1'];
-        if (options.gptImage15)
-            model = MODELS['gpt-image-1.5'];
-        // Determine operation mode
-        const isEdit = options.edit;
-        const isVariation = options.variation;
-        const isGenerate = !isEdit && !isVariation;
-        // Validate operation mode with model
+        const model = resolveModel(options);
+        const isEdit = Boolean(options.edit);
         const constraints = getModelConstraints(model);
         if (isEdit && (!constraints || !constraints.supportsEdit)) {
             throw new Error(`Model ${model} does not support image editing`);
         }
-        if (isVariation && (!constraints || !constraints.supportsVariation)) {
-            throw new Error(`Model ${model} does not support image variations`);
+        if (options.partialImages !== undefined && !options.stream) {
+            throw new Error('--partial-images requires --stream');
         }
         // Validate required parameters
-        if (isGenerate && options.prompt.length === 0) {
-            throw new Error('--prompt is required for image generation');
+        if (options.prompt.length === 0) {
+            throw new Error('--prompt is required');
         }
-        if ((isEdit || isVariation) && options.image.length === 0) {
-            throw new Error('--image is required for edit/variation operations');
+        if (isEdit && options.image.length === 0) {
+            throw new Error('--image is required for --edit');
         }
-        if (isEdit && options.prompt.length === 0) {
-            throw new Error('--prompt is required for image editing');
+        const deprecation = getModelDeprecation(model);
+        if (deprecation) {
+            logger.warn(`${model} is scheduled for removal on ${deprecation.shutdown}; migrate to ${deprecation.replacement}`);
         }
         // Initialize API
         const api = new OpenAIImageAPI({
@@ -464,21 +309,69 @@ async function main() {
             logLevel: options.logLevel,
         });
         // Determine output directory
-        const modelDir = model.replace('dall-e-', 'dalle-');
         let outputDir;
         if (options.outputDir) {
             // Validate user-provided output path for path traversal
             outputDir = validateOutputPath(options.outputDir);
         }
         else {
-            outputDir = path.join(getOutputDir(), modelDir);
+            outputDir = path.join(getOutputDir(), model);
         }
         await ensureDirectory(outputDir);
         logger.info(`Using model: ${model}`);
-        logger.info(`Operation: ${isEdit ? 'edit' : isVariation ? 'variation' : 'generate'}`);
+        logger.info(`Operation: ${isEdit ? 'edit' : 'generate'}${options.stream ? ' (streaming)' : ''}`);
         logger.info(`Output directory: ${outputDir}`);
-        // Process requests
-        if (isGenerate) {
+        const common = {
+            model,
+            size: options.size,
+            quality: options.quality,
+            n: options.n,
+            background: options.background,
+            moderation: options.moderation,
+            output_format: options.outputFormat,
+            output_compression: options.outputCompression,
+            user: options.user,
+            partial_images: options.stream ? options.partialImages : undefined,
+        };
+        if (isEdit) {
+            // Image editing — first prompt only
+            const prompt = options.prompt[0];
+            logger.info(`\n${'='.repeat(60)}`);
+            logger.info(`Editing ${options.image.length} image(s) with prompt: "${prompt.substring(0, 50)}..."`);
+            logger.info(`${'='.repeat(60)}`);
+            const params = {
+                ...common,
+                image: options.image.length === 1 ? options.image[0] : options.image,
+                prompt,
+                mask: options.mask,
+                input_fidelity: options.inputFidelity,
+            };
+            if (options.dryRun) {
+                dryRun(model, params);
+                return;
+            }
+            const spinner = createSpinner('Editing image').start();
+            const partialPaths = [];
+            const stem = requestStem(prompt, `${model}-edit`);
+            try {
+                const format = options.outputFormat ?? 'png';
+                const response = options.stream
+                    ? await api.generateImageEditStream(params, {
+                        onPartialImage: partialImageWriter(outputDir, stem, format, partialPaths),
+                    })
+                    : await api.generateImageEdit(params);
+                spinner.stop('Image edit complete');
+                const { savedPaths, metadataPath } = await persistResult(api, response, outputDir, model, 'edit', stem, params, options.outputFormat, partialPaths);
+                logger.info(`\n✓ Success! Generated ${savedPaths.length} edited image(s):`);
+                savedPaths.forEach((p) => logger.info(`  - ${p}`));
+                logger.info(`  - ${metadataPath}`);
+            }
+            catch (error) {
+                spinner.fail(`Edit failed: ${error.message}`);
+                throw error;
+            }
+        }
+        else {
             // Batch generation: process each prompt
             for (let i = 0; i < options.prompt.length; i++) {
                 const prompt = options.prompt[i];
@@ -486,54 +379,23 @@ async function main() {
                 logger.info(`\n${'='.repeat(60)}`);
                 logger.info(`Processing prompt${promptNum}: "${prompt.substring(0, 60)}..."`);
                 logger.info(`${'='.repeat(60)}`);
-                // Build parameters
-                const params = {
-                    prompt,
-                    model,
-                    size: options.size,
-                    quality: options.quality,
-                    n: options.n,
-                    style: options.style,
-                    background: options.background,
-                    moderation: options.moderation,
-                    output_format: options.outputFormat,
-                    output_compression: options.outputCompression,
-                    response_format: options.responseFormat,
-                    user: options.user,
-                };
+                const params = { ...common, prompt };
                 if (options.dryRun) {
-                    logger.info('Dry run - parameters validated successfully:');
-                    logger.info(JSON.stringify(params, null, 2));
+                    dryRun(model, params);
                     continue;
                 }
                 const spinner = createSpinner('Generating image').start();
+                const partialPaths = [];
+                const stem = requestStem(prompt, model);
                 try {
-                    const response = await api.generateImage(params);
+                    const format = options.outputFormat ?? 'png';
+                    const response = options.stream
+                        ? await api.generateImageStream(params, {
+                            onPartialImage: partialImageWriter(outputDir, stem, format, partialPaths),
+                        })
+                        : await api.generateImage(params);
                     spinner.stop('Image generation complete');
-                    // Determine output format
-                    let outputFormat = 'png';
-                    if (options.outputFormat) {
-                        outputFormat = options.outputFormat;
-                    }
-                    else if (response.output_format) {
-                        outputFormat = response.output_format;
-                    }
-                    // Save images
-                    const baseFilename = generateTimestampedFilename(prompt, modelDir, outputFormat);
-                    const savedPaths = await api.saveImages(response, outputDir, baseFilename.replace(`.${outputFormat}`, ''), outputFormat);
-                    // Save metadata
-                    const metadataPath = path.join(outputDir, baseFilename.replace(`.${outputFormat}`, '_metadata.json'));
-                    await writeToFile({
-                        model,
-                        operation: 'generate',
-                        timestamp: new Date().toISOString(),
-                        parameters: params,
-                        response: {
-                            created: response.created,
-                            images: savedPaths,
-                            usage: response.usage,
-                        },
-                    }, metadataPath);
+                    const { savedPaths, metadataPath } = await persistResult(api, response, outputDir, model, 'generate', stem, params, options.outputFormat, partialPaths);
                     logger.info(`\n✓ Success! Generated ${savedPaths.length} image(s):`);
                     savedPaths.forEach((p) => logger.info(`  - ${p}`));
                     logger.info(`  - ${metadataPath}`);
@@ -547,123 +409,6 @@ async function main() {
                         throw error;
                     }
                 }
-            }
-        }
-        else if (isEdit) {
-            // Image editing
-            const prompt = options.prompt[0];
-            if (!prompt) {
-                throw new Error('--prompt is required for editing');
-            }
-            logger.info(`\n${'='.repeat(60)}`);
-            logger.info(`Editing ${options.image.length} image(s) with prompt: "${prompt.substring(0, 50)}..."`);
-            logger.info(`${'='.repeat(60)}`);
-            const params = {
-                image: options.image.length === 1 ? options.image[0] : options.image,
-                prompt,
-                model,
-                mask: options.mask,
-                size: options.size,
-                quality: options.quality,
-                n: options.n,
-                input_fidelity: options.inputFidelity,
-                background: options.background,
-                output_format: options.outputFormat,
-                output_compression: options.outputCompression,
-                response_format: options.responseFormat,
-                user: options.user,
-            };
-            if (options.dryRun) {
-                logger.info('Dry run - parameters validated successfully:');
-                logger.info(JSON.stringify(params, null, 2));
-                return;
-            }
-            const spinner = createSpinner('Editing image').start();
-            try {
-                const response = await api.generateImageEdit(params);
-                spinner.stop('Image edit complete');
-                // Determine output format
-                let outputFormat = 'png';
-                if (options.outputFormat) {
-                    outputFormat = options.outputFormat;
-                }
-                else if (response.output_format) {
-                    outputFormat = response.output_format;
-                }
-                // Save images
-                const baseFilename = generateTimestampedFilename(prompt, `${modelDir}-edit`, outputFormat);
-                const savedPaths = await api.saveImages(response, outputDir, baseFilename.replace(`.${outputFormat}`, ''), outputFormat);
-                // Save metadata
-                const metadataPath = path.join(outputDir, baseFilename.replace(`.${outputFormat}`, '_metadata.json'));
-                await writeToFile({
-                    model,
-                    operation: 'edit',
-                    timestamp: new Date().toISOString(),
-                    parameters: params,
-                    response: {
-                        created: response.created,
-                        images: savedPaths,
-                        usage: response.usage,
-                    },
-                }, metadataPath);
-                logger.info(`\n✓ Success! Generated ${savedPaths.length} edited image(s):`);
-                savedPaths.forEach((p) => logger.info(`  - ${p}`));
-                logger.info(`  - ${metadataPath}`);
-            }
-            catch (error) {
-                spinner.fail(`Edit failed: ${error.message}`);
-                throw error;
-            }
-        }
-        else if (isVariation) {
-            // Image variations
-            const imagePath = options.image[0];
-            if (!imagePath) {
-                throw new Error('--image is required for variations');
-            }
-            logger.info(`\n${'='.repeat(60)}`);
-            logger.info(`Creating variations of: ${imagePath}`);
-            logger.info(`${'='.repeat(60)}`);
-            const params = {
-                image: imagePath,
-                model: 'dall-e-2',
-                n: options.n || 2,
-                size: options.size,
-                response_format: options.responseFormat,
-                user: options.user,
-            };
-            if (options.dryRun) {
-                logger.info('Dry run - parameters validated successfully:');
-                logger.info(JSON.stringify(params, null, 2));
-                return;
-            }
-            const spinner = createSpinner('Creating variations').start();
-            try {
-                const response = await api.generateImageVariation(params);
-                spinner.stop('Variations created');
-                // Save images
-                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-                const baseFilename = `${timestamp}_${modelDir}-variation`;
-                const savedPaths = await api.saveImages(response, outputDir, baseFilename, 'png');
-                // Save metadata
-                const metadataPath = path.join(outputDir, `${baseFilename}_metadata.json`);
-                await writeToFile({
-                    model,
-                    operation: 'variation',
-                    timestamp: new Date().toISOString(),
-                    parameters: params,
-                    response: {
-                        created: response.created,
-                        images: savedPaths,
-                    },
-                }, metadataPath);
-                logger.info(`\n✓ Success! Generated ${savedPaths.length} variation(s):`);
-                savedPaths.forEach((p) => logger.info(`  - ${p}`));
-                logger.info(`  - ${metadataPath}`);
-            }
-            catch (error) {
-                spinner.fail(`Variation failed: ${error.message}`);
-                throw error;
             }
         }
         logger.info('\n✓ All operations completed successfully!\n');

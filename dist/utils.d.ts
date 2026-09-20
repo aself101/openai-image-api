@@ -2,9 +2,11 @@
  * OpenAI Image Service Utility Functions
  *
  * Utility functions for OpenAI image generation, including file I/O,
- * image handling, and data transformations.
+ * image handling, SSRF-safe URL validation, SSE parsing, and data
+ * transformations.
  */
-import type { Spinner, ImageFileConstraints, VideoFileConstraints, VideoObject, SaveVideoOptions, PollVideoOptions, ValidationResult, Logger } from './types.js';
+import type { Readable } from 'stream';
+import type { Spinner, ImageFileConstraints, ValidationResult, Logger, RawSSEEvent } from './types.js';
 declare const logger: Logger;
 /**
  * Set the logging level.
@@ -100,7 +102,7 @@ export declare function promptToFilename(prompt: string, maxLength?: number): st
  * Generate timestamped filename with prompt.
  *
  * @param prompt - The image generation prompt
- * @param model - Model name (dalle-2, dalle-3, gpt-image-1)
+ * @param model - Model name (e.g. gpt-image-2.5-flare)
  * @param extension - File extension (png, jpg, webp)
  * @returns Timestamped filename
  */
@@ -126,55 +128,33 @@ export declare function pause(seconds: number): Promise<void>;
  * @returns Spinner object with update() and stop() methods
  */
 export declare function createSpinner(message?: string): Spinner;
-/** Interface for video API with retrieveVideo method */
-interface VideoAPIInterface {
-    retrieveVideo(videoId: string, options?: {
-        signal?: AbortSignal;
-    }): Promise<VideoObject>;
-}
 /**
- * Poll video status with progress display.
+ * Parse a Server-Sent Events byte stream into discrete events.
  *
- * @param api - OpenAIVideoAPI instance
- * @param videoId - Video job ID
- * @param options - Polling options
- * @returns Completed video object
- * @throws Error If video generation fails, times out, or is cancelled
+ * Implements the subset of the SSE wire format the Image API emits: events are
+ * separated by a blank line, each carrying an `event:` line and one or more
+ * `data:` lines. Comment lines (`:`) and unknown fields are ignored. A trailing
+ * event with no terminating blank line is flushed when the stream ends, so a
+ * server that closes the connection immediately after the final event is not
+ * mis-read as having sent nothing.
+ *
+ * Image payloads are large (a `max`-quality PNG is several megabytes of base64
+ * in a single `data:` line), so chunks are accumulated as strings and only
+ * split on the event delimiter; no per-line buffering limit is imposed.
+ *
+ * @param stream - Readable emitting UTF-8 SSE bytes
+ * @returns Async generator of raw events in arrival order
  */
-export declare function pollVideoWithProgress(api: VideoAPIInterface, videoId: string, options?: PollVideoOptions): Promise<VideoObject>;
+export declare function parseSSEStream(stream: Readable): AsyncGenerator<RawSSEEvent>;
 /**
- * Save video buffer to MP4 file.
+ * Read an entire stream into a UTF-8 string.
  *
- * @param buffer - Video data buffer
- * @param filepath - Destination file path
- * @param options - Save options
- * @returns Path to saved file
- * @throws Error If buffer is invalid or exceeds size limit
- */
-export declare function saveVideoFile(buffer: Buffer, filepath: string, options?: SaveVideoOptions): Promise<string>;
-/**
- * Generate timestamped filename for video.
+ * Used to recover an error body when a streaming request fails: axios hands
+ * back `response.data` as a Readable in stream mode, so the JSON error the API
+ * returned must be drained before it can be reported.
  *
- * @param prompt - The video generation prompt
- * @param model - Model name (sora-2, sora-2-pro)
- * @param extension - File extension (mp4, webp, jpg)
- * @returns Timestamped filename
+ * @param stream - Readable to drain
+ * @param maxBytes - Refuse to buffer more than this (default 1 MiB)
  */
-export declare function generateVideoFilename(prompt: string, model: string, extension?: string): string;
-/**
- * Save video metadata as JSON file.
- *
- * @param videoObject - Video object from API
- * @param filepath - Path to save metadata JSON
- * @returns Path to saved metadata file
- */
-export declare function saveVideoMetadata(videoObject: VideoObject, filepath: string): Promise<string>;
-/**
- * Validate video file from download.
- *
- * @param buffer - Video buffer to validate
- * @param constraints - Validation constraints
- * @returns Validation result with valid flag and errors array
- */
-export declare function validateVideoFile(buffer: Buffer, constraints?: VideoFileConstraints): ValidationResult;
+export declare function readStreamToString(stream: Readable, maxBytes?: number): Promise<string>;
 //# sourceMappingURL=utils.d.ts.map

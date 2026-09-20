@@ -1,7 +1,7 @@
 /**
- * OpenAI Image Generation API Configuration
+ * OpenAI Image API Configuration
  *
- * Handles authentication and API configuration settings.
+ * Handles authentication, model constraints, and parameter validation.
  *
  * API key can be provided via (in priority order):
  * 1. Command line flag: --api-key
@@ -14,6 +14,11 @@
  * 2. Create an account or sign in
  * 3. Navigate to API keys section
  * 4. Generate your API key
+ *
+ * Constraint values below are transcribed from the Image API reference
+ * (developers.openai.com/api/reference/resources/images) and the image
+ * generation guide as of 2026-09-20. Where the reference is silent the
+ * comment says so; do not tighten a constraint the API does not publish.
  */
 import dotenv from 'dotenv';
 import { existsSync } from 'fs';
@@ -29,125 +34,113 @@ if (existsSync(globalConfigPath)) {
 }
 // OpenAI API Base URL
 export const BASE_URL = 'https://api.openai.com';
-// API Endpoints - Images
+// API Endpoints
 export const ENDPOINTS = {
-    'generate': '/v1/images/generations',
-    'edit': '/v1/images/edits',
-    'variation': '/v1/images/variations',
+    generate: '/v1/images/generations',
+    edit: '/v1/images/edits',
 };
-// API Endpoints - Videos (Sora)
-export const VIDEO_ENDPOINTS = {
-    'create': '/v1/videos',
-    'retrieve': '/v1/videos/{video_id}',
-    'content': '/v1/videos/{video_id}/content',
-    'remix': '/v1/videos/{video_id}/remix',
-    'list': '/v1/videos',
-    'delete': '/v1/videos/{video_id}',
-};
-// Supported models - Images
+/**
+ * Default model when none is given.
+ *
+ * Flare is the guide's recommendation for "fast, high-quality everyday image
+ * generation"; Sunburst is preferred where editing precision matters. The
+ * previous default (`dall-e-2`) was shut down 2026-05-12.
+ */
+export const DEFAULT_MODEL = 'gpt-image-2.5-flare';
+/** CLI-friendly names to canonical model identifiers */
 export const MODELS = {
-    'dalle-2': 'dall-e-2',
-    'dalle-3': 'dall-e-3',
-    'gpt-image-1': 'gpt-image-1',
+    sunburst: 'gpt-image-2.5-sunburst',
+    flare: 'gpt-image-2.5-flare',
+    'gpt-image-2': 'gpt-image-2',
     'gpt-image-1.5': 'gpt-image-1.5',
+    'gpt-image-1': 'gpt-image-1',
+    'gpt-image-1-mini': 'gpt-image-1-mini',
 };
-// Supported models - Videos (Sora)
-export const VIDEO_MODELS = {
-    'sora-2': 'sora-2',
-    'sora-2-pro': 'sora-2-pro',
+/** Dated snapshots resolved to the family whose constraints they share */
+export const MODEL_ALIASES = {
+    'gpt-image-2.5-sunburst-2026-09-08': 'gpt-image-2.5-sunburst',
+    'gpt-image-2.5-flare-2026-09-08': 'gpt-image-2.5-flare',
+    'gpt-image-2-2026-04-21': 'gpt-image-2',
+};
+/**
+ * Announced shutdowns, from developers.openai.com/api/docs/deprecations.
+ * Models listed here still work until the date shown; the API class logs a
+ * warning the first time each is used.
+ */
+export const MODEL_DEPRECATIONS = {
+    'gpt-image-1': { shutdown: '2026-10-23', replacement: 'gpt-image-2' },
+    'gpt-image-1-mini': { shutdown: '2026-12-01', replacement: 'gpt-image-2' },
+    'gpt-image-1.5': { shutdown: '2026-12-01', replacement: 'gpt-image-2' },
+};
+/** Free-form size rules shared by gpt-image-2 and the 2.5 models */
+const FLEXIBLE_SIZE = {
+    multipleOf: 16,
+    maxEdge: 3840,
+    maxAspectRatio: 3,
+    pixels: { min: 655_360, max: 8_294_400 },
+    experimentalAbovePixels: 2560 * 1440,
+};
+/** Standard sizes every GPT Image model accepts */
+const STANDARD_SIZES = ['1024x1024', '1536x1024', '1024x1536', 'auto'];
+/** Constraints common to every GPT Image model */
+const GPT_IMAGE_BASE = {
+    promptMaxLength: 32000,
+    n: { min: 1, max: 10 },
+    supportsEdit: true,
+    backgrounds: ['auto', 'transparent', 'opaque'],
+    moderation: ['auto', 'low'],
+    outputFormats: ['png', 'jpeg', 'webp'],
+    outputCompression: { min: 0, max: 100 },
+    partialImages: { min: 0, max: 3 },
+    imageMaxSize: 50 * 1024 * 1024, // 50MB
+    imageFormats: ['png', 'webp', 'jpg', 'jpeg'],
+    editMaxImages: 16,
 };
 // Model-specific parameter constraints
 export const MODEL_CONSTRAINTS = {
-    'dall-e-2': {
-        sizes: ['256x256', '512x512', '1024x1024'],
-        promptMaxLength: 1000,
-        quality: ['standard'],
-        n: { min: 1, max: 10 },
-        supportsEdit: true,
-        supportsVariation: true,
-        responseFormats: ['url', 'b64_json'],
-        imageMaxSize: 4 * 1024 * 1024, // 4MB
-        imageRequirements: 'square PNG file less than 4MB',
-        editMaxImages: 1,
+    'gpt-image-2.5-sunburst': {
+        ...GPT_IMAGE_BASE,
+        sizes: STANDARD_SIZES,
+        flexibleSize: FLEXIBLE_SIZE,
+        quality: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+        // The reference lists input_fidelity on /edits without excluding 2.5, but
+        // the live API answers 400 "does not support the 'input_fidelity'
+        // parameter" for both 2.5 models (verified 2026-09-20). Documented for
+        // gpt-image-2 only; the behaviour extends to its successors.
+        inputFidelity: undefined,
     },
-    'dall-e-3': {
-        sizes: ['1024x1024', '1792x1024', '1024x1792'],
-        promptMaxLength: 4000,
-        quality: ['standard', 'hd'],
-        n: { min: 1, max: 1 }, // Only n=1 supported
-        styles: ['vivid', 'natural'],
-        supportsEdit: false,
-        supportsVariation: false,
-        responseFormats: ['url', 'b64_json'],
+    'gpt-image-2.5-flare': {
+        ...GPT_IMAGE_BASE,
+        sizes: STANDARD_SIZES,
+        flexibleSize: FLEXIBLE_SIZE,
+        quality: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+        inputFidelity: undefined, // as Sunburst; live-verified 2026-09-20
     },
-    'gpt-image-1': {
-        sizes: ['1024x1024', '1536x1024', '1024x1536', 'auto'],
-        promptMaxLength: 32000,
-        quality: ['auto', 'high', 'medium', 'low'],
-        n: { min: 1, max: 10 },
-        backgrounds: ['auto', 'transparent', 'opaque'],
-        moderation: ['auto', 'low'],
-        outputFormats: ['png', 'jpeg', 'webp'],
-        outputCompression: { min: 0, max: 100 },
-        partialImages: { min: 0, max: 3 },
-        inputFidelity: ['high', 'low'],
-        supportsEdit: true,
-        supportsVariation: false,
-        responseFormat: 'b64_json', // Always returns base64
-        imageMaxSize: 50 * 1024 * 1024, // 50MB
-        imageFormats: ['png', 'webp', 'jpg'],
-        editMaxImages: 16,
+    'gpt-image-2': {
+        ...GPT_IMAGE_BASE,
+        sizes: STANDARD_SIZES,
+        flexibleSize: FLEXIBLE_SIZE,
+        quality: ['auto', 'low', 'medium', 'high'],
+        // "For gpt-image-2, omit this parameter; the API doesn't allow changing it"
+        inputFidelity: undefined,
     },
     'gpt-image-1.5': {
-        sizes: ['1024x1024', '1536x1024', '1024x1536', 'auto'],
-        promptMaxLength: 32000,
-        quality: ['auto', 'high', 'medium', 'low'],
-        n: { min: 1, max: 10 },
-        backgrounds: ['auto', 'transparent', 'opaque'],
-        moderation: ['auto', 'low'],
-        outputFormats: ['png', 'jpeg', 'webp'],
-        outputCompression: { min: 0, max: 100 },
-        partialImages: { min: 0, max: 3 },
+        ...GPT_IMAGE_BASE,
+        sizes: STANDARD_SIZES,
+        quality: ['auto', 'low', 'medium', 'high'],
         inputFidelity: ['high', 'low'],
-        supportsEdit: true,
-        supportsVariation: false,
-        responseFormat: 'b64_json', // Always returns base64
-        imageMaxSize: 50 * 1024 * 1024, // 50MB
-        imageFormats: ['png', 'webp', 'jpg'],
-        editMaxImages: 16,
     },
-};
-// Video model-specific parameter constraints (Sora)
-export const VIDEO_MODEL_CONSTRAINTS = {
-    'sora-2': {
-        sizes: ['720x1280', '1280x720', '1024x1792', '1792x1024'],
-        seconds: [4, 8, 12],
-        quality: ['standard'],
-        promptMaxLength: 10000,
-        pollInterval: 10, // seconds between status checks
-        timeout: 1200, // 20 minutes maximum wait time
-        statuses: ['queued', 'in_progress', 'completed', 'failed'],
-        variants: ['video', 'thumbnail', 'spritesheet'],
-        supportsInputReference: true, // Image for first frame
-        supportsRemix: true,
-        videoMaxSize: 100 * 1024 * 1024, // 100MB max download
-        imageReferenceMaxSize: 50 * 1024 * 1024, // 50MB for input_reference
-        imageReferenceFormats: ['image/jpeg', 'image/png', 'image/webp'],
+    'gpt-image-1': {
+        ...GPT_IMAGE_BASE,
+        sizes: STANDARD_SIZES,
+        quality: ['auto', 'low', 'medium', 'high'],
+        inputFidelity: ['high', 'low'],
     },
-    'sora-2-pro': {
-        sizes: ['720x1280', '1280x720', '1024x1792', '1792x1024'],
-        seconds: [4, 8, 12],
-        quality: ['standard'],
-        promptMaxLength: 10000,
-        pollInterval: 10, // seconds between status checks
-        timeout: 1200, // 20 minutes maximum wait time
-        statuses: ['queued', 'in_progress', 'completed', 'failed'],
-        variants: ['video', 'thumbnail', 'spritesheet'],
-        supportsInputReference: true, // Image for first frame
-        supportsRemix: true,
-        videoMaxSize: 100 * 1024 * 1024, // 100MB max download
-        imageReferenceMaxSize: 50 * 1024 * 1024, // 50MB for input_reference
-        imageReferenceFormats: ['image/jpeg', 'image/png', 'image/webp'],
+    'gpt-image-1-mini': {
+        ...GPT_IMAGE_BASE,
+        sizes: STANDARD_SIZES,
+        quality: ['auto', 'low', 'medium', 'high'],
+        inputFidelity: ['high', 'low'],
     },
 };
 /**
@@ -166,7 +159,7 @@ export function getOpenAIApiKey(cliApiKey = null) {
         const errorMessage = [
             'OPENAI_API_KEY not found. Please provide your API key via one of these methods:',
             '',
-            '  1. CLI flag:           openai-img --api-key YOUR_KEY --dalle-3 --prompt "..."',
+            '  1. CLI flag:           openai-img --api-key YOUR_KEY --prompt "..."',
             '  2. Environment var:    export OPENAI_API_KEY=YOUR_KEY',
             '  3. Local .env file:    Create .env in current directory with OPENAI_API_KEY=YOUR_KEY',
             '  4. Global config:      Create ~/.openai/.env with OPENAI_API_KEY=YOUR_KEY',
@@ -192,10 +185,7 @@ export function validateApiKeyFormat(apiKey) {
     // - Project format: sk-proj-[alphanumeric characters]
     // Valid characters: A-Z, a-z, 0-9, underscore, hyphen
     const keyPattern = /^sk-(proj-)?[A-Za-z0-9_-]{40,}$/;
-    if (!keyPattern.test(apiKey)) {
-        return false;
-    }
-    return true;
+    return keyPattern.test(apiKey);
 }
 /**
  * Get the output directory for generated images.
@@ -206,15 +196,84 @@ export function getOutputDir() {
     return process.env.OPENAI_OUTPUT_DIR || 'datasets/openai';
 }
 /**
+ * Resolve a model identifier (canonical or dated snapshot) to its family.
+ *
+ * @param model - Model identifier as the caller supplied it
+ * @returns The family, or null if the identifier is not supported
+ */
+export function resolveModelFamily(model) {
+    if (model in MODEL_CONSTRAINTS) {
+        return model;
+    }
+    return MODEL_ALIASES[model] ?? null;
+}
+/**
+ * Whether a string is a model identifier this package will send.
+ */
+export function isSupportedModel(model) {
+    return resolveModelFamily(model) !== null;
+}
+/**
+ * Get model constraints for validation and help text.
+ *
+ * @param model - Model identifier (canonical or snapshot)
+ * @returns Model constraints or null if model not found
+ */
+export function getModelConstraints(model) {
+    const family = resolveModelFamily(model);
+    return family ? MODEL_CONSTRAINTS[family] : null;
+}
+/**
+ * Get the announced deprecation for a model, if any.
+ */
+export function getModelDeprecation(model) {
+    const family = resolveModelFamily(model);
+    return family ? (MODEL_DEPRECATIONS[family] ?? null) : null;
+}
+/**
+ * Validate a free-form `WIDTHxHEIGHT` size against a flexible-size rule set.
+ *
+ * @returns Error messages; empty when the size is acceptable
+ */
+export function validateFlexibleSize(size, rule) {
+    const match = /^(\d+)x(\d+)$/.exec(size);
+    if (!match) {
+        return [`Size "${size}" must be "auto" or WIDTHxHEIGHT (e.g. 1536x864)`];
+    }
+    const width = parseInt(match[1], 10);
+    const height = parseInt(match[2], 10);
+    const errors = [];
+    if (width % rule.multipleOf !== 0 || height % rule.multipleOf !== 0) {
+        errors.push(`Size "${size}": width and height must both be multiples of ${rule.multipleOf}`);
+    }
+    if (width > rule.maxEdge || height > rule.maxEdge) {
+        errors.push(`Size "${size}": neither edge may exceed ${rule.maxEdge}px`);
+    }
+    const long = Math.max(width, height);
+    const short = Math.min(width, height);
+    if (short === 0 || long / short > rule.maxAspectRatio) {
+        errors.push(`Size "${size}": aspect ratio must be between 1:${rule.maxAspectRatio} and ${rule.maxAspectRatio}:1`);
+    }
+    const pixels = width * height;
+    if (pixels < rule.pixels.min || pixels > rule.pixels.max) {
+        errors.push(`Size "${size}": total pixels (${pixels.toLocaleString()}) must be between ` +
+            `${rule.pixels.min.toLocaleString()} and ${rule.pixels.max.toLocaleString()}`);
+    }
+    return errors;
+}
+/**
  * Validate parameters for a specific model.
  *
- * @param model - The model name
+ * Accepts generation, edit, and streaming parameter shapes; fields a shape does
+ * not carry are simply absent and skipped.
+ *
+ * @param model - The model identifier
  * @param params - Parameters to validate
  * @returns Validation result with valid flag and errors array
  */
 export function validateModelParams(model, params) {
     const errors = [];
-    const constraints = MODEL_CONSTRAINTS[model];
+    const constraints = getModelConstraints(model);
     if (!constraints) {
         errors.push(`Unknown model: ${model}`);
         return { valid: false, errors };
@@ -223,107 +282,75 @@ export function validateModelParams(model, params) {
     if (params.prompt && params.prompt.length > constraints.promptMaxLength) {
         errors.push(`Prompt exceeds maximum length of ${constraints.promptMaxLength} characters for ${model}`);
     }
-    // Validate size
+    // Validate size: enumerated list first, then free-form rules where permitted
     if (params.size && !constraints.sizes.includes(params.size)) {
-        errors.push(`Invalid size "${params.size}" for ${model}. Valid sizes: ${constraints.sizes.join(', ')}`);
-    }
-    // Validate quality
-    if (params.quality && constraints.quality && !constraints.quality.includes(params.quality)) {
-        errors.push(`Invalid quality "${params.quality}" for ${model}. Valid options: ${constraints.quality.join(', ')}`);
-    }
-    // Validate n parameter
-    if (params.n !== undefined) {
-        const { min, max } = constraints.n;
-        if (params.n < min || params.n > max) {
-            errors.push(`Parameter "n" must be between ${min} and ${max} for ${model}`);
+        if (constraints.flexibleSize) {
+            errors.push(...validateFlexibleSize(params.size, constraints.flexibleSize));
         }
-    }
-    // Validate style (dall-e-3 only)
-    if (params.style && constraints.styles && !constraints.styles.includes(params.style)) {
-        errors.push(`Invalid style "${params.style}" for ${model}. Valid styles: ${constraints.styles.join(', ')}`);
-    }
-    // Validate background (gpt-image-1 only)
-    if (params.background && constraints.backgrounds && !constraints.backgrounds.includes(params.background)) {
-        errors.push(`Invalid background "${params.background}" for ${model}. Valid options: ${constraints.backgrounds.join(', ')}`);
-    }
-    // Validate output format (gpt-image-1 only)
-    if (params.output_format && constraints.outputFormats && !constraints.outputFormats.includes(params.output_format)) {
-        errors.push(`Invalid output_format "${params.output_format}" for ${model}. Valid formats: ${constraints.outputFormats.join(', ')}`);
-    }
-    // Validate response format
-    if (params.response_format && constraints.responseFormats && !constraints.responseFormats.includes(params.response_format)) {
-        errors.push(`Invalid response_format "${params.response_format}" for ${model}. Valid formats: ${constraints.responseFormats.join(', ')}`);
-    }
-    // Validate output compression (gpt-image-1 only)
-    if (params.output_compression !== undefined && constraints.outputCompression) {
-        const { min, max } = constraints.outputCompression;
-        if (params.output_compression < min || params.output_compression > max) {
-            errors.push(`output_compression must be between ${min} and ${max}`);
-        }
-    }
-    return {
-        valid: errors.length === 0,
-        errors,
-    };
-}
-/**
- * Get model constraints for validation and help text.
- *
- * @param model - The model name
- * @returns Model constraints or null if model not found
- */
-export function getModelConstraints(model) {
-    return MODEL_CONSTRAINTS[model] || null;
-}
-/**
- * Validate parameters for a specific video model.
- *
- * @param model - The video model name
- * @param params - Parameters to validate
- * @returns Validation result with valid flag and errors array
- */
-export function validateVideoParams(model, params) {
-    const errors = [];
-    const constraints = VIDEO_MODEL_CONSTRAINTS[model];
-    if (!constraints) {
-        errors.push(`Unknown video model: ${model}`);
-        return { valid: false, errors };
-    }
-    // Validate prompt length
-    if (params.prompt && params.prompt.length > constraints.promptMaxLength) {
-        errors.push(`Prompt exceeds maximum length of ${constraints.promptMaxLength} characters for ${model}`);
-    }
-    // Validate size
-    if (params.size && !constraints.sizes.includes(params.size)) {
-        errors.push(`Invalid size "${params.size}" for ${model}. Valid sizes: ${constraints.sizes.join(', ')}`);
-    }
-    // Validate seconds (duration)
-    if (params.seconds !== undefined) {
-        const secondsNum = typeof params.seconds === 'string' ? parseInt(params.seconds, 10) : params.seconds;
-        if (!constraints.seconds.includes(secondsNum)) {
-            errors.push(`Invalid duration "${params.seconds}" for ${model}. Valid durations: ${constraints.seconds.join(', ')} seconds`);
+        else {
+            errors.push(`Invalid size "${params.size}" for ${model}. Valid sizes: ${constraints.sizes.join(', ')}`);
         }
     }
     // Validate quality
     if (params.quality && !constraints.quality.includes(params.quality)) {
         errors.push(`Invalid quality "${params.quality}" for ${model}. Valid options: ${constraints.quality.join(', ')}`);
     }
-    // Validate variant (for content download)
-    if (params.variant && !constraints.variants.includes(params.variant)) {
-        errors.push(`Invalid variant "${params.variant}" for ${model}. Valid variants: ${constraints.variants.join(', ')}`);
+    // Validate n parameter
+    if (params.n !== undefined) {
+        const { min, max } = constraints.n;
+        if (!Number.isInteger(params.n) || params.n < min || params.n > max) {
+            errors.push(`Parameter "n" must be an integer between ${min} and ${max} for ${model}`);
+        }
+    }
+    // Validate background
+    if (params.background && !constraints.backgrounds.includes(params.background)) {
+        errors.push(`Invalid background "${params.background}" for ${model}. Valid options: ${constraints.backgrounds.join(', ')}`);
+    }
+    // Validate output format
+    if (params.output_format && !constraints.outputFormats.includes(params.output_format)) {
+        errors.push(`Invalid output_format "${params.output_format}" for ${model}. Valid formats: ${constraints.outputFormats.join(', ')}`);
+    }
+    // Transparent backgrounds are only encodable as png or webp
+    if (params.background === 'transparent' && params.output_format === 'jpeg') {
+        errors.push('background "transparent" requires output_format "png" or "webp"');
+    }
+    // Validate output compression
+    if (params.output_compression !== undefined) {
+        const { min, max } = constraints.outputCompression;
+        if (params.output_compression < min || params.output_compression > max) {
+            errors.push(`output_compression must be between ${min} and ${max}`);
+        }
+        // The reference scopes this parameter to webp/jpeg. png is the default, so
+        // an unspecified format with compression set is also a png request.
+        if (!params.output_format || params.output_format === 'png') {
+            errors.push('output_compression requires output_format "jpeg" or "webp"');
+        }
+    }
+    // Validate moderation
+    if (params.moderation && !constraints.moderation.includes(params.moderation)) {
+        errors.push(`Invalid moderation "${params.moderation}" for ${model}. Valid options: ${constraints.moderation.join(', ')}`);
+    }
+    // Validate input fidelity (edits)
+    if (params.input_fidelity !== undefined) {
+        if (!constraints.inputFidelity) {
+            errors.push(`input_fidelity is not accepted by ${model}; it processes inputs at high fidelity automatically`);
+        }
+        else if (!constraints.inputFidelity.includes(params.input_fidelity)) {
+            errors.push(`Invalid input_fidelity "${params.input_fidelity}" for ${model}. Valid options: ${constraints.inputFidelity.join(', ')}`);
+        }
+    }
+    // Validate partial images (streaming)
+    if (params.partial_images !== undefined) {
+        const { min, max } = constraints.partialImages;
+        if (!Number.isInteger(params.partial_images) ||
+            params.partial_images < min ||
+            params.partial_images > max) {
+            errors.push(`partial_images must be an integer between ${min} and ${max}`);
+        }
     }
     return {
         valid: errors.length === 0,
         errors,
     };
-}
-/**
- * Get video model constraints for validation and help text.
- *
- * @param model - The video model name
- * @returns Video model constraints or null if model not found
- */
-export function getVideoModelConstraints(model) {
-    return VIDEO_MODEL_CONSTRAINTS[model] || null;
 }
 //# sourceMappingURL=config.js.map

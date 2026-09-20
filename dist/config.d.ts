@@ -1,7 +1,7 @@
 /**
- * OpenAI Image Generation API Configuration
+ * OpenAI Image API Configuration
  *
- * Handles authentication and API configuration settings.
+ * Handles authentication, model constraints, and parameter validation.
  *
  * API key can be provided via (in priority order):
  * 1. Command line flag: --api-key
@@ -14,15 +14,34 @@
  * 2. Create an account or sign in
  * 3. Navigate to API keys section
  * 4. Generate your API key
+ *
+ * Constraint values below are transcribed from the Image API reference
+ * (developers.openai.com/api/reference/resources/images) and the image
+ * generation guide as of 2026-09-20. Where the reference is silent the
+ * comment says so; do not tighten a constraint the API does not publish.
  */
-import type { ImageModel, VideoModel, ImageModelConstraints, VideoModelConstraints, ImageModelConstraintsMap, VideoModelConstraintsMap, ValidationResult, GenerateImageParams, CreateVideoParams } from './types.js';
+import type { ImageModel, ImageModelFamily, ImageModelConstraints, ImageModelConstraintsMap, ModelDeprecation, ValidationResult, GenerateImageParams, EditImageParams, StreamParams, FlexibleSizeConstraint } from './types.js';
 export declare const BASE_URL: string;
 export declare const ENDPOINTS: Record<string, string>;
-export declare const VIDEO_ENDPOINTS: Record<string, string>;
-export declare const MODELS: Record<string, ImageModel>;
-export declare const VIDEO_MODELS: Record<string, VideoModel>;
+/**
+ * Default model when none is given.
+ *
+ * Flare is the guide's recommendation for "fast, high-quality everyday image
+ * generation"; Sunburst is preferred where editing precision matters. The
+ * previous default (`dall-e-2`) was shut down 2026-05-12.
+ */
+export declare const DEFAULT_MODEL: ImageModelFamily;
+/** CLI-friendly names to canonical model identifiers */
+export declare const MODELS: Record<string, ImageModelFamily>;
+/** Dated snapshots resolved to the family whose constraints they share */
+export declare const MODEL_ALIASES: Record<string, ImageModelFamily>;
+/**
+ * Announced shutdowns, from developers.openai.com/api/docs/deprecations.
+ * Models listed here still work until the date shown; the API class logs a
+ * warning the first time each is used.
+ */
+export declare const MODEL_DEPRECATIONS: Partial<Record<ImageModelFamily, ModelDeprecation>>;
 export declare const MODEL_CONSTRAINTS: ImageModelConstraintsMap;
-export declare const VIDEO_MODEL_CONSTRAINTS: VideoModelConstraintsMap;
 /**
  * Retrieve OpenAI API key from environment variables or CLI flag.
  *
@@ -45,35 +64,42 @@ export declare function validateApiKeyFormat(apiKey: string | null | undefined):
  */
 export declare function getOutputDir(): string;
 /**
- * Validate parameters for a specific model.
+ * Resolve a model identifier (canonical or dated snapshot) to its family.
  *
- * @param model - The model name
- * @param params - Parameters to validate
- * @returns Validation result with valid flag and errors array
+ * @param model - Model identifier as the caller supplied it
+ * @returns The family, or null if the identifier is not supported
  */
-export declare function validateModelParams(model: string, params: Partial<GenerateImageParams>): ValidationResult;
+export declare function resolveModelFamily(model: string): ImageModelFamily | null;
+/**
+ * Whether a string is a model identifier this package will send.
+ */
+export declare function isSupportedModel(model: string): model is ImageModel;
 /**
  * Get model constraints for validation and help text.
  *
- * @param model - The model name
+ * @param model - Model identifier (canonical or snapshot)
  * @returns Model constraints or null if model not found
  */
 export declare function getModelConstraints(model: string): ImageModelConstraints | null;
 /**
- * Validate parameters for a specific video model.
+ * Get the announced deprecation for a model, if any.
+ */
+export declare function getModelDeprecation(model: string): ModelDeprecation | null;
+/**
+ * Validate a free-form `WIDTHxHEIGHT` size against a flexible-size rule set.
  *
- * @param model - The video model name
+ * @returns Error messages; empty when the size is acceptable
+ */
+export declare function validateFlexibleSize(size: string, rule: FlexibleSizeConstraint): string[];
+/**
+ * Validate parameters for a specific model.
+ *
+ * Accepts generation, edit, and streaming parameter shapes; fields a shape does
+ * not carry are simply absent and skipped.
+ *
+ * @param model - The model identifier
  * @param params - Parameters to validate
  * @returns Validation result with valid flag and errors array
  */
-export declare function validateVideoParams(model: string, params: Partial<CreateVideoParams> & {
-    variant?: string;
-}): ValidationResult;
-/**
- * Get video model constraints for validation and help text.
- *
- * @param model - The video model name
- * @returns Video model constraints or null if model not found
- */
-export declare function getVideoModelConstraints(model: string): VideoModelConstraints | null;
+export declare function validateModelParams(model: string, params: Partial<GenerateImageParams & EditImageParams & StreamParams>): ValidationResult;
 //# sourceMappingURL=config.d.ts.map

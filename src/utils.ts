@@ -2,7 +2,8 @@
  * OpenAI Image Service Utility Functions
  *
  * Utility functions for OpenAI image generation, including file I/O,
- * image handling, and data transformations.
+ * image handling, SSRF-safe URL validation, SSE parsing, and data
+ * transformations.
  */
 
 import fs from 'fs/promises';
@@ -12,17 +13,8 @@ import winston from 'winston';
 import axios from 'axios';
 import { lookup } from 'dns/promises';
 import { isIPv4, isIPv6 } from 'net';
-import type {
-  Spinner,
-  ImageFileConstraints,
-  VideoFileConstraints,
-  VideoObject,
-  VideoMetadata,
-  SaveVideoOptions,
-  PollVideoOptions,
-  ValidationResult,
-  Logger,
-} from './types.js';
+import type { Readable } from 'stream';
+import type { Spinner, ImageFileConstraints, ValidationResult, Logger, RawSSEEvent } from './types.js';
 
 // Configure module logger
 const logger: Logger = winston.createLogger({
@@ -457,7 +449,7 @@ export function promptToFilename(prompt: string, maxLength: number = 50): string
  * Generate timestamped filename with prompt.
  *
  * @param prompt - The image generation prompt
- * @param model - Model name (dalle-2, dalle-3, gpt-image-1)
+ * @param model - Model name (e.g. gpt-image-2.5-flare)
  * @param extension - File extension (png, jpg, webp)
  * @returns Timestamped filename
  */
@@ -600,257 +592,87 @@ export function createSpinner(message: string = 'Processing'): Spinner {
 }
 
 // =============================================================================
-// VIDEO-SPECIFIC UTILITIES (Sora)
+// SERVER-SENT EVENTS
 // =============================================================================
 
-/** Interface for video API with retrieveVideo method */
-interface VideoAPIInterface {
-  retrieveVideo(videoId: string, options?: { signal?: AbortSignal }): Promise<VideoObject>;
-}
-
 /**
- * Poll video status with progress display.
+ * Parse a Server-Sent Events byte stream into discrete events.
  *
- * @param api - OpenAIVideoAPI instance
- * @param videoId - Video job ID
- * @param options - Polling options
- * @returns Completed video object
- * @throws Error If video generation fails, times out, or is cancelled
+ * Implements the subset of the SSE wire format the Image API emits: events are
+ * separated by a blank line, each carrying an `event:` line and one or more
+ * `data:` lines. Comment lines (`:`) and unknown fields are ignored. A trailing
+ * event with no terminating blank line is flushed when the stream ends, so a
+ * server that closes the connection immediately after the final event is not
+ * mis-read as having sent nothing.
+ *
+ * Image payloads are large (a `max`-quality PNG is several megabytes of base64
+ * in a single `data:` line), so chunks are accumulated as strings and only
+ * split on the event delimiter; no per-line buffering limit is imposed.
+ *
+ * @param stream - Readable emitting UTF-8 SSE bytes
+ * @returns Async generator of raw events in arrival order
  */
-export async function pollVideoWithProgress(
-  api: VideoAPIInterface,
-  videoId: string,
-  options: PollVideoOptions = {}
-): Promise<VideoObject> {
-  const {
-    interval = 10000, // 10 seconds
-    timeout = 600000, // 10 minutes
-    showSpinner = true,
-    signal,
-  } = options;
+export async function* parseSSEStream(stream: Readable): AsyncGenerator<RawSSEEvent> {
+  let buffer = '';
 
-  const startTime = Date.now();
-  let spinner: Spinner | null = null;
-
-  if (showSpinner) {
-    spinner = createSpinner('Generating video');
-    spinner.start();
-  }
-
-  try {
-    while (true) {
-      // Check if operation was cancelled
-      if (signal?.aborted) {
-        if (spinner) spinner.fail('Video generation cancelled');
-        throw new Error('Video generation was cancelled');
-      }
-
-      // Check timeout
-      const elapsed = Date.now() - startTime;
-      if (elapsed > timeout) {
-        if (spinner) spinner.fail('Video generation timed out');
-        throw new Error(`Video generation timed out after ${timeout / 1000}s`);
-      }
-
-      // Retrieve video status (pass signal for cancellable requests)
-      const video = await api.retrieveVideo(videoId, { signal });
-
-      // Update spinner with progress
-      if (spinner && video.progress !== undefined) {
-        const progressPercent = video.progress || 0;
-        const elapsedSec = Math.floor(elapsed / 1000);
-
-        // Estimate remaining time based on progress
-        let estimatedMsg = '';
-        if (progressPercent > 0 && progressPercent < 100) {
-          const estimatedTotal = (elapsed / progressPercent) * 100;
-          const estimatedRemaining = Math.floor((estimatedTotal - elapsed) / 1000);
-          estimatedMsg = ` - ${estimatedRemaining}s remaining`;
-        }
-
-        const statusText =
-          video.status === 'queued'
-            ? 'Queued'
-            : video.status === 'in_progress'
-              ? 'Processing'
-              : video.status;
-        spinner.update(`${statusText} (${progressPercent}% complete, ${elapsedSec}s elapsed${estimatedMsg})`);
-      }
-
-      // Check if completed
-      if (video.status === 'completed') {
-        if (spinner) spinner.stop('Video generation completed');
-        return video;
-      }
-
-      // Check if failed
-      if (video.status === 'failed') {
-        if (spinner) spinner.fail('Video generation failed');
-        const errorMsg = video.error?.message || 'Video generation failed';
-        throw new Error(errorMsg);
-      }
-
-      // Wait before next poll
-      await pause(interval / 1000);
+  const flush = (block: string): RawSSEEvent | null => {
+    let event: string | undefined;
+    const data: string[] = [];
+    for (const rawLine of block.split('\n')) {
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+      if (line === '' || line.startsWith(':')) continue;
+      const colon = line.indexOf(':');
+      const field = colon === -1 ? line : line.slice(0, colon);
+      // The spec strips exactly one leading space after the colon
+      let value = colon === -1 ? '' : line.slice(colon + 1);
+      if (value.startsWith(' ')) value = value.slice(1);
+      if (field === 'event') event = value;
+      else if (field === 'data') data.push(value);
     }
-  } catch (error) {
-    if (spinner) spinner.fail((error as Error).message);
-    throw error;
-  }
-}
-
-/**
- * Save video buffer to MP4 file.
- *
- * @param buffer - Video data buffer
- * @param filepath - Destination file path
- * @param options - Save options
- * @returns Path to saved file
- * @throws Error If buffer is invalid or exceeds size limit
- */
-export async function saveVideoFile(
-  buffer: Buffer,
-  filepath: string,
-  options: SaveVideoOptions = {}
-): Promise<string> {
-  const { maxSize = 100 * 1024 * 1024 } = options; // 100MB default
-
-  if (!Buffer.isBuffer(buffer)) {
-    throw new Error('Invalid video data: expected Buffer');
-  }
-
-  if (buffer.length === 0) {
-    throw new Error('Video buffer is empty');
-  }
-
-  if (buffer.length > maxSize) {
-    const maxMB = (maxSize / (1024 * 1024)).toFixed(1);
-    const actualMB = (buffer.length / (1024 * 1024)).toFixed(1);
-    throw new Error(`Video file size (${actualMB}MB) exceeds maximum (${maxMB}MB)`);
-  }
-
-  try {
-    logger.debug(`Saving video file to ${filepath}`);
-
-    const dir = path.dirname(filepath);
-    await ensureDirectory(dir);
-
-    await fs.writeFile(filepath, buffer);
-    logger.info(`Saved video: ${filepath} (${(buffer.length / (1024 * 1024)).toFixed(2)}MB)`);
-
-    return filepath;
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`Error saving video file: ${err.message}`);
-    throw new Error(`Failed to save video file: ${err.message}`);
-  }
-}
-
-/**
- * Generate timestamped filename for video.
- *
- * @param prompt - The video generation prompt
- * @param model - Model name (sora-2, sora-2-pro)
- * @param extension - File extension (mp4, webp, jpg)
- * @returns Timestamped filename
- */
-export function generateVideoFilename(
-  prompt: string,
-  model: string,
-  extension: string = 'mp4'
-): string {
-  const now = new Date();
-  const datePart = now.toISOString().replace(/[:.]/g, '-').split('T')[0];
-  const timePart = now.toISOString().replace(/[:.]/g, '-').split('T')[1].substring(0, 8);
-  const timestamp = `${datePart}_${timePart}`;
-  const promptPart = promptToFilename(prompt, 40);
-  return `${timestamp}_${model}_${promptPart}.${extension}`;
-}
-
-/**
- * Save video metadata as JSON file.
- *
- * @param videoObject - Video object from API
- * @param filepath - Path to save metadata JSON
- * @returns Path to saved metadata file
- */
-export async function saveVideoMetadata(videoObject: VideoObject, filepath: string): Promise<string> {
-  try {
-    logger.debug(`Saving video metadata to ${filepath}`);
-
-    const metadata: VideoMetadata = {
-      id: videoObject.id,
-      object: videoObject.object,
-      created_at: videoObject.created_at,
-      status: videoObject.status,
-      model: videoObject.model,
-      progress: videoObject.progress,
-      seconds: videoObject.seconds,
-      size: videoObject.size,
-      prompt: videoObject.prompt,
-      remixed_from_video_id: videoObject.remixed_from_video_id,
-      error: videoObject.error,
-      timestamp: new Date().toISOString(),
-    };
-
-    await writeToFile(metadata, filepath, 'json');
-    logger.info(`Saved video metadata: ${filepath}`);
-
-    return filepath;
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`Error saving video metadata: ${err.message}`);
-    throw new Error(`Failed to save video metadata: ${err.message}`);
-  }
-}
-
-/**
- * Validate video file from download.
- *
- * @param buffer - Video buffer to validate
- * @param constraints - Validation constraints
- * @returns Validation result with valid flag and errors array
- */
-export function validateVideoFile(
-  buffer: Buffer,
-  constraints: VideoFileConstraints = {}
-): ValidationResult {
-  const errors: string[] = [];
-
-  if (!Buffer.isBuffer(buffer)) {
-    errors.push('Invalid video data: expected Buffer');
-    return { valid: false, errors };
-  }
-
-  if (buffer.length === 0) {
-    errors.push('Video buffer is empty');
-    return { valid: false, errors };
-  }
-
-  // Check file size
-  if (constraints.maxSize && buffer.length > constraints.maxSize) {
-    const maxMB = (constraints.maxSize / (1024 * 1024)).toFixed(1);
-    const actualMB = (buffer.length / (1024 * 1024)).toFixed(1);
-    errors.push(`Video file size (${actualMB}MB) exceeds maximum (${maxMB}MB)`);
-  }
-
-  // Check MP4 magic bytes
-  // MP4 files start with various signatures:
-  // - ftyp box: 0x00 0x00 0x00 [size] 'ftyp'
-  // Common MP4 variants at bytes 4-7: 'ftyp', 'mdat', 'moov', 'wide'
-  if (buffer.length >= 8) {
-    const signature = buffer.slice(4, 8).toString();
-    const validSignatures = ['ftyp', 'mdat', 'moov', 'wide', 'free', 'skip'];
-
-    if (!validSignatures.includes(signature)) {
-      errors.push('File does not appear to be a valid MP4 video');
-    }
-  } else {
-    errors.push('Video file is too small to be valid');
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
+    if (data.length === 0 && event === undefined) return null;
+    return { event, data: data.join('\n') };
   };
+
+  for await (const chunk of stream) {
+    buffer += typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8');
+
+    // Events end at a blank line; tolerate CRLF as well as LF
+    let boundary: number;
+    while ((boundary = buffer.search(/\r?\n\r?\n/)) !== -1) {
+      const delimiterLength = buffer[boundary] === '\r' ? 4 : 2;
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + delimiterLength);
+      const parsed = flush(block);
+      if (parsed) yield parsed;
+    }
+  }
+
+  if (buffer.trim().length > 0) {
+    const parsed = flush(buffer);
+    if (parsed) yield parsed;
+  }
+}
+
+/**
+ * Read an entire stream into a UTF-8 string.
+ *
+ * Used to recover an error body when a streaming request fails: axios hands
+ * back `response.data` as a Readable in stream mode, so the JSON error the API
+ * returned must be drained before it can be reported.
+ *
+ * @param stream - Readable to drain
+ * @param maxBytes - Refuse to buffer more than this (default 1 MiB)
+ */
+export async function readStreamToString(stream: Readable, maxBytes: number = 1024 * 1024): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of stream) {
+    const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : (chunk as Buffer);
+    total += buf.length;
+    if (total > maxBytes) {
+      throw new Error(`Stream exceeded ${maxBytes} bytes while reading error body`);
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }

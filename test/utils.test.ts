@@ -1,7 +1,7 @@
 /**
  * Utility Functions Tests
  *
- * Tests for utils.ts - file I/O, image handling, and helper functions.
+ * Tests for utils.ts - file I/O, image handling, SSE parsing, and helper functions.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -25,15 +25,13 @@ import {
   validateImageUrl,
   validateImagePath,
   validateOutputPath,
-  pollVideoWithProgress,
-  saveVideoFile,
-  generateVideoFilename,
-  saveVideoMetadata,
-  validateVideoFile
+  parseSSEStream,
+  readStreamToString,
 } from '../src/utils.js';
+import { Readable } from 'stream';
 import { lookup } from 'dns/promises';
 import type { Mock } from 'vitest';
-import type { VideoObject } from '../src/types.js';
+import type { RawSSEEvent } from '../src/types.js';
 
 const TEST_DIR = './test-output';
 
@@ -178,22 +176,22 @@ describe('Utility Functions', () => {
   describe('generateTimestampedFilename', () => {
     it('should generate filename with timestamp', () => {
       const prompt = 'a cat';
-      const model = 'dalle-3';
+      const model = 'gpt-image-2';
       const result = generateTimestampedFilename(prompt, model, 'png');
 
-      expect(result).toContain('dalle-3');
+      expect(result).toContain('gpt-image-2');
       expect(result).toContain('a_cat');
       // Timestamp format: YYYY-MM-DD_HHMMSS or YYYY-MM-DD_HH-MM-SS
-      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}_[\d-]+_dalle-3_a_cat\.png$/);
+      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}_[\d-]+_gpt-image-2_a_cat\.png$/);
     });
 
     it('should use specified extension', () => {
-      const result = generateTimestampedFilename('test', 'dalle-2', 'webp');
+      const result = generateTimestampedFilename('test', 'gpt-image-2.5-flare', 'webp');
       expect(result).toMatch(/\.webp$/);
     });
 
     it('should sanitize prompt in filename', () => {
-      const result = generateTimestampedFilename('Test! Image@ #123', 'dalle-2');
+      const result = generateTimestampedFilename('Test! Image@ #123', 'gpt-image-2.5-flare');
       expect(result).toContain('test_image_123');
     });
   });
@@ -397,254 +395,81 @@ describe('Utility Functions', () => {
     });
   });
 
-  describe('Video Utilities (Sora)', () => {
-    describe('pollVideoWithProgress', () => {
-      it('should poll until video is completed', async () => {
-        const mockApi = {
-          retrieveVideo: vi.fn()
-            .mockResolvedValueOnce({
-              id: 'video_123',
-              status: 'in_progress',
-              progress: 25
-            } as VideoObject)
-            .mockResolvedValueOnce({
-              id: 'video_123',
-              status: 'in_progress',
-              progress: 75
-            } as VideoObject)
-            .mockResolvedValueOnce({
-              id: 'video_123',
-              status: 'completed',
-              progress: 100
-            } as VideoObject)
-        };
+  describe('parseSSEStream', () => {
+    const collect = async (stream: Readable) => {
+      const out: RawSSEEvent[] = [];
+      for await (const e of parseSSEStream(stream)) out.push(e);
+      return out;
+    };
 
-        const result = await pollVideoWithProgress(mockApi, 'video_123', {
-          interval: 10,
-          timeout: 5000,
-          showSpinner: false
-        });
-
-        expect(result.status).toBe('completed');
-        expect(mockApi.retrieveVideo).toHaveBeenCalledTimes(3);
-      });
-
-      it('should throw error if video fails', async () => {
-        const mockApi = {
-          retrieveVideo: vi.fn().mockResolvedValue({
-            id: 'video_123',
-            status: 'failed',
-            error: { message: 'Generation failed' }
-          } as VideoObject)
-        };
-
-        await expect(pollVideoWithProgress(mockApi, 'video_123', {
-          interval: 10,
-          showSpinner: false
-        })).rejects.toThrow('Generation failed');
-      });
-
-      it('should throw error on timeout', async () => {
-        const mockApi = {
-          retrieveVideo: vi.fn().mockResolvedValue({
-            id: 'video_123',
-            status: 'in_progress',
-            progress: 50
-          } as VideoObject)
-        };
-
-        await expect(pollVideoWithProgress(mockApi, 'video_123', {
-          interval: 100,
-          timeout: 200,  // Very short timeout
-          showSpinner: false
-        })).rejects.toThrow('timed out');
-      });
+    it('should parse event and data fields from a single chunk', async () => {
+      const events = await collect(
+        Readable.from(['event: image_generation.completed\ndata: {"a":1}\n\n'])
+      );
+      expect(events).toEqual([{ event: 'image_generation.completed', data: '{"a":1}' }]);
     });
 
-    describe('saveVideoFile', () => {
-      it('should save video buffer to file', async () => {
-        const filepath = path.join(TEST_DIR, 'test-video.mp4');
-        const videoBuffer = Buffer.from('fake video data');
-
-        await saveVideoFile(videoBuffer, filepath);
-
-        expect(existsSync(filepath)).toBe(true);
-        const content = await fs.readFile(filepath);
-        expect(content).toEqual(videoBuffer);
-      });
-
-      it('should create parent directories', async () => {
-        const filepath = path.join(TEST_DIR, 'nested', 'video', 'test.mp4');
-        const videoBuffer = Buffer.from('fake video data');
-
-        await saveVideoFile(videoBuffer, filepath);
-
-        expect(existsSync(filepath)).toBe(true);
-      });
-
-      it('should throw error if buffer is not provided', async () => {
-        const filepath = path.join(TEST_DIR, 'test.mp4');
-
-        await expect(saveVideoFile(null as unknown as Buffer, filepath))
-          .rejects.toThrow('Invalid video data: expected Buffer');
-      });
-
-      it('should validate buffer is a Buffer instance', async () => {
-        const filepath = path.join(TEST_DIR, 'test.mp4');
-
-        await expect(saveVideoFile('not a buffer' as unknown as Buffer, filepath))
-          .rejects.toThrow('Invalid video data: expected Buffer');
-      });
-
-      it('should reject buffer exceeding size limit', async () => {
-        const filepath = path.join(TEST_DIR, 'test.mp4');
-        const largeBuffer = Buffer.alloc(101 * 1024 * 1024); // 101MB
-
-        await expect(saveVideoFile(largeBuffer, filepath, {
-          maxSize: 100 * 1024 * 1024  // 100MB limit
-        })).rejects.toThrow('exceeds maximum');
-      });
+    it('should reassemble events split across arbitrary chunk boundaries', async () => {
+      const text = 'event: e1\ndata: {"i":0}\n\nevent: e2\ndata: {"i":1}\n\n';
+      const parts: string[] = [];
+      for (let i = 0; i < text.length; i += 3) parts.push(text.slice(i, i + 3));
+      const events = await collect(Readable.from(parts));
+      expect(events).toEqual([
+        { event: 'e1', data: '{"i":0}' },
+        { event: 'e2', data: '{"i":1}' },
+      ]);
     });
 
-    describe('generateVideoFilename', () => {
-      it('should generate filename with timestamp', () => {
-        const prompt = 'a cat on a motorcycle';
-        const model = 'sora-2';
-        const result = generateVideoFilename(prompt, model);
-
-        expect(result).toContain('sora-2');
-        expect(result).toContain('a_cat_on_a_motorcycle');
-        // Format: YYYY-MM-DD_HH-MM-SS_model_prompt.mp4
-        expect(result).toMatch(/^\d{4}-\d{2}-\d{2}_[\d-]+_sora-2_a_cat_on_a_motorcycle\.mp4$/);
-      });
-
-      it('should use specified extension', () => {
-        const result = generateVideoFilename('test', 'sora-2', 'webm');
-        expect(result).toMatch(/\.webm$/);
-      });
-
-      it('should default to mp4 extension', () => {
-        const result = generateVideoFilename('test', 'sora-2');
-        expect(result).toMatch(/\.mp4$/);
-      });
-
-      it('should sanitize prompt in filename', () => {
-        const result = generateVideoFilename('Test! Video@ #123', 'sora-2');
-        expect(result).toContain('test_video_123');
-      });
-
-      it('should truncate long prompts', () => {
-        const longPrompt = 'a'.repeat(100);
-        const result = generateVideoFilename(longPrompt, 'sora-2');
-
-        // Filename should be reasonable length (not 100+ chars)
-        expect(result.length).toBeLessThan(80);
-      });
-
-      it('should include model name in filename', () => {
-        const result = generateVideoFilename('test', 'sora-2-pro');
-        expect(result).toContain('sora-2-pro');
-      });
+    it('should accept Buffer chunks', async () => {
+      const events = await collect(Readable.from([Buffer.from('data: x\n\n')]));
+      expect(events).toEqual([{ event: undefined, data: 'x' }]);
     });
 
-    describe('saveVideoMetadata', () => {
-      it('should save video metadata as JSON', async () => {
-        const filepath = path.join(TEST_DIR, 'metadata.json');
-        const videoObject: VideoObject = {
-          id: 'video_123',
-          object: 'video',
-          created_at: 1234567890,
-          model: 'sora-2',
-          status: 'completed',
-          progress: 100,
-          prompt: 'a cat on a motorcycle'
-        };
-
-        await saveVideoMetadata(videoObject, filepath);
-
-        expect(existsSync(filepath)).toBe(true);
-        const content = await fs.readFile(filepath, 'utf8');
-        const parsed = JSON.parse(content);
-        // The function saves specific fields, not the entire object
-        expect(parsed.id).toBe('video_123');
-        expect(parsed.model).toBe('sora-2');
-        expect(parsed.status).toBe('completed');
-      });
-
-      it('should create parent directories', async () => {
-        const filepath = path.join(TEST_DIR, 'nested', 'metadata.json');
-        const videoObject = { id: 'video_123', status: 'completed' } as VideoObject;
-
-        await saveVideoMetadata(videoObject, filepath);
-
-        expect(existsSync(filepath)).toBe(true);
-      });
-
-      it('should format JSON nicely with indentation', async () => {
-        const filepath = path.join(TEST_DIR, 'metadata.json');
-        const videoObject = {
-          id: 'video_123',
-          model: 'sora-2'
-        } as VideoObject;
-
-        await saveVideoMetadata(videoObject, filepath);
-
-        const content = await fs.readFile(filepath, 'utf8');
-        expect(content).toContain('\n');  // Should be formatted, not minified
-        expect(content).toContain('  ');  // Should have indentation
-      });
+    it('should join multi-line data with newlines', async () => {
+      const events = await collect(Readable.from(['data: line1\ndata: line2\n\n']));
+      expect(events[0].data).toBe('line1\nline2');
     });
 
-    describe('validateVideoFile', () => {
-      it('should validate MP4 file magic bytes (ftyp)', () => {
-        // Create file with valid MP4 magic bytes: "ftyp" at offset 4
-        const mp4Header = Buffer.from([
-          0x00, 0x00, 0x00, 0x20,  // Size
-          0x66, 0x74, 0x79, 0x70,  // "ftyp"
-          0x69, 0x73, 0x6F, 0x6D   // "isom"
-        ]);
+    it('should ignore comments and unknown fields', async () => {
+      const events = await collect(Readable.from([': keepalive\nid: 7\nretry: 100\ndata: ok\n\n']));
+      expect(events).toEqual([{ event: undefined, data: 'ok' }]);
+    });
 
-        const result = validateVideoFile(Buffer.concat([mp4Header, Buffer.alloc(100)]));
+    it('should tolerate CRLF line endings', async () => {
+      const events = await collect(Readable.from(['event: e\r\ndata: 1\r\n\r\nevent: f\r\ndata: 2\r\n\r\n']));
+      expect(events).toEqual([
+        { event: 'e', data: '1' },
+        { event: 'f', data: '2' },
+      ]);
+    });
 
-        expect(result.valid).toBe(true);
-        expect(result.errors).toHaveLength(0);
-      });
+    it('should flush a trailing event with no terminating blank line', async () => {
+      const events = await collect(Readable.from(['event: last\ndata: fin']));
+      expect(events).toEqual([{ event: 'last', data: 'fin' }]);
+    });
 
-      it('should reject non-MP4 files', () => {
-        const invalidBuffer = Buffer.from('This is not a video file');
+    it('should yield nothing for an empty or keepalive-only stream', async () => {
+      expect(await collect(Readable.from([]))).toEqual([]);
+      expect(await collect(Readable.from([': ping\n\n: ping\n\n']))).toEqual([]);
+    });
 
-        const result = validateVideoFile(invalidBuffer);
-
-        expect(result.valid).toBe(false);
-        expect(result.errors[0]).toContain('not appear to be a valid MP4');
-      });
-
-      it('should reject empty buffers', () => {
-        const result = validateVideoFile(Buffer.alloc(0));
-
-        expect(result.valid).toBe(false);
-        expect(result.errors[0]).toContain('Video buffer is empty');
-      });
-
-      it('should reject buffers that are too small', () => {
-        const result = validateVideoFile(Buffer.alloc(7)); // Less than 8 bytes
-
-        expect(result.valid).toBe(false);
-        expect(result.errors[0]).toContain('too small to be valid');
-      });
-
-      it('should validate buffer size constraints', () => {
-        const largeBuffer = Buffer.alloc(101 * 1024 * 1024); // 101MB
-
-        const result = validateVideoFile(largeBuffer, {
-          maxSize: 100 * 1024 * 1024  // 100MB limit
-        });
-
-        expect(result.valid).toBe(false);
-        expect(result.errors[0]).toContain('exceeds maximum');
-      });
+    it('should preserve large single-line payloads intact', async () => {
+      const big = 'A'.repeat(200_000);
+      const events = await collect(Readable.from([`data: ${big.slice(0, 100_000)}`, `${big.slice(100_000)}\n\n`]));
+      expect(events[0].data).toHaveLength(200_000);
     });
   });
+
+  describe('readStreamToString', () => {
+    it('should concatenate string and Buffer chunks', async () => {
+      expect(await readStreamToString(Readable.from(['ab', Buffer.from('cd')]))).toBe('abcd');
+    });
+
+    it('should refuse bodies above the byte limit', async () => {
+      await expect(readStreamToString(Readable.from(['x'.repeat(20)]), 10)).rejects.toThrow('exceeded 10 bytes');
+    });
+  });
+
 
   describe('Security: validateOutputPath', () => {
     it('should accept valid absolute paths', () => {

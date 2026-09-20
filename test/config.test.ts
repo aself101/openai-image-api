@@ -10,15 +10,17 @@ import {
   validateApiKeyFormat,
   getOutputDir,
   validateModelParams,
+  validateFlexibleSize,
   getModelConstraints,
-  validateVideoParams,
-  getVideoModelConstraints,
+  getModelDeprecation,
+  resolveModelFamily,
+  isSupportedModel,
   MODELS,
+  MODEL_ALIASES,
+  MODEL_DEPRECATIONS,
   ENDPOINTS,
   MODEL_CONSTRAINTS,
-  VIDEO_MODELS,
-  VIDEO_ENDPOINTS,
-  VIDEO_MODEL_CONSTRAINTS
+  DEFAULT_MODEL,
 } from '../src/config.js';
 
 describe('Configuration', () => {
@@ -36,15 +38,13 @@ describe('Configuration', () => {
 
   describe('getOpenAIApiKey', () => {
     it('should return CLI API key when provided', () => {
-      const cliKey = 'sk-test-cli-key-123';
-      const result = getOpenAIApiKey(cliKey);
-      expect(result).toBe(cliKey);
+      process.env.OPENAI_API_KEY = 'env-key';
+      expect(getOpenAIApiKey('cli-key')).toBe('cli-key');
     });
 
     it('should return environment variable when no CLI key', () => {
-      process.env.OPENAI_API_KEY = 'sk-test-env-key-456';
-      const result = getOpenAIApiKey();
-      expect(result).toBe('sk-test-env-key-456');
+      process.env.OPENAI_API_KEY = 'env-key';
+      expect(getOpenAIApiKey()).toBe('env-key');
     });
 
     it('should throw error when no API key found', () => {
@@ -52,23 +52,19 @@ describe('Configuration', () => {
       expect(() => getOpenAIApiKey()).toThrow('OPENAI_API_KEY not found');
     });
 
-    it('should prioritize CLI key over environment variable', () => {
-      const cliKey = 'sk-cli-key';
-      process.env.OPENAI_API_KEY = 'sk-env-key';
-      const result = getOpenAIApiKey(cliKey);
-      expect(result).toBe(cliKey);
+    it('should not mention removed models in the help text', () => {
+      delete process.env.OPENAI_API_KEY;
+      expect(() => getOpenAIApiKey()).not.toThrow(/dalle|sora/i);
     });
   });
 
   describe('validateApiKeyFormat', () => {
     it('should return true for valid-looking API key', () => {
-      const validKey = 'sk-1234567890abcdefghijklmnopqrstuvwxyz123456';
-      expect(validateApiKeyFormat(validKey)).toBe(true);
+      expect(validateApiKeyFormat('sk-' + 'a'.repeat(48))).toBe(true);
     });
 
     it('should return true for project API keys', () => {
-      const projectKey = 'sk-proj-1234567890abcdefghijklmnopqrstuvwxyz';
-      expect(validateApiKeyFormat(projectKey)).toBe(true);
+      expect(validateApiKeyFormat('sk-proj-' + 'a'.repeat(48))).toBe(true);
     });
 
     it('should return false for null or undefined', () => {
@@ -77,14 +73,11 @@ describe('Configuration', () => {
     });
 
     it('should return false for keys without sk- prefix', () => {
-      expect(validateApiKeyFormat('1234567890abcdefghijklmnopqrstuvwxyz123456')).toBe(false);
-      expect(validateApiKeyFormat('api-1234567890abcdefghijklmnop')).toBe(false);
+      expect(validateApiKeyFormat('a'.repeat(48))).toBe(false);
     });
 
     it('should return false for short strings', () => {
-      expect(validateApiKeyFormat('short')).toBe(false);
-      expect(validateApiKeyFormat('sk-123')).toBe(false);
-      expect(validateApiKeyFormat('sk-12345678901234567890')).toBe(false);
+      expect(validateApiKeyFormat('sk-short')).toBe(false);
     });
   });
 
@@ -100,236 +93,285 @@ describe('Configuration', () => {
     });
   });
 
+  describe('Model catalogue', () => {
+    it('should default to gpt-image-2.5-flare', () => {
+      expect(DEFAULT_MODEL).toBe('gpt-image-2.5-flare');
+      expect(MODEL_CONSTRAINTS[DEFAULT_MODEL]).toBeDefined();
+    });
+
+    it('should expose exactly the six GPT Image families', () => {
+      expect(Object.keys(MODEL_CONSTRAINTS).sort()).toEqual([
+        'gpt-image-1',
+        'gpt-image-1-mini',
+        'gpt-image-1.5',
+        'gpt-image-2',
+        'gpt-image-2.5-flare',
+        'gpt-image-2.5-sunburst',
+      ]);
+    });
+
+    it('should not carry any DALL-E or Sora identifiers', () => {
+      const everything = JSON.stringify({ MODELS, MODEL_ALIASES, MODEL_CONSTRAINTS, ENDPOINTS });
+      expect(everything).not.toMatch(/dall-e|sora|video/i);
+    });
+
+    it('should map every CLI name to a constrained family', () => {
+      for (const family of Object.values(MODELS)) {
+        expect(MODEL_CONSTRAINTS[family]).toBeDefined();
+      }
+    });
+
+    it('should resolve dated snapshots to their family', () => {
+      expect(resolveModelFamily('gpt-image-2.5-flare-2026-09-08')).toBe('gpt-image-2.5-flare');
+      expect(resolveModelFamily('gpt-image-2.5-sunburst-2026-09-08')).toBe('gpt-image-2.5-sunburst');
+      expect(resolveModelFamily('gpt-image-2-2026-04-21')).toBe('gpt-image-2');
+    });
+
+    it('should resolve canonical names to themselves', () => {
+      expect(resolveModelFamily('gpt-image-2')).toBe('gpt-image-2');
+    });
+
+    it('should return null for unknown identifiers', () => {
+      expect(resolveModelFamily('dall-e-3')).toBeNull();
+      expect(resolveModelFamily('gpt-image-9')).toBeNull();
+      expect(isSupportedModel('dall-e-2')).toBe(false);
+      expect(isSupportedModel('gpt-image-2.5-flare-2026-09-08')).toBe(true);
+    });
+
+    it('should have only the two image endpoints', () => {
+      expect(ENDPOINTS).toEqual({
+        generate: '/v1/images/generations',
+        edit: '/v1/images/edits',
+      });
+    });
+  });
+
+  describe('Model deprecations', () => {
+    it('should record shutdown dates for the 1.x models', () => {
+      expect(MODEL_DEPRECATIONS['gpt-image-1']?.shutdown).toBe('2026-10-23');
+      expect(MODEL_DEPRECATIONS['gpt-image-1-mini']?.shutdown).toBe('2026-12-01');
+      expect(MODEL_DEPRECATIONS['gpt-image-1.5']?.shutdown).toBe('2026-12-01');
+    });
+
+    it('should not deprecate gpt-image-2 or the 2.5 models', () => {
+      expect(getModelDeprecation('gpt-image-2')).toBeNull();
+      expect(getModelDeprecation('gpt-image-2.5-flare')).toBeNull();
+      expect(getModelDeprecation('gpt-image-2.5-sunburst-2026-09-08')).toBeNull();
+    });
+
+    it('should point every deprecated model at a live replacement', () => {
+      for (const dep of Object.values(MODEL_DEPRECATIONS)) {
+        expect(dep).toBeDefined();
+        expect(getModelDeprecation(dep!.replacement)).toBeNull();
+      }
+    });
+  });
+
   describe('Model Constraints', () => {
-    it('should have constraints for all models', () => {
-      expect(MODEL_CONSTRAINTS['dall-e-2']).toBeDefined();
-      expect(MODEL_CONSTRAINTS['dall-e-3']).toBeDefined();
-      expect(MODEL_CONSTRAINTS['gpt-image-1']).toBeDefined();
+    it('should allow xhigh and max only on the 2.5 models', () => {
+      for (const family of Object.keys(MODEL_CONSTRAINTS) as Array<keyof typeof MODEL_CONSTRAINTS>) {
+        const q = MODEL_CONSTRAINTS[family].quality;
+        if (family.startsWith('gpt-image-2.5')) {
+          expect(q).toContain('xhigh');
+          expect(q).toContain('max');
+        } else {
+          expect(q).not.toContain('xhigh');
+          expect(q).not.toContain('max');
+        }
+      }
     });
 
-    it('should have correct size constraints for dall-e-2', () => {
-      const constraints = MODEL_CONSTRAINTS['dall-e-2'];
-      expect(constraints.sizes).toContain('256x256');
-      expect(constraints.sizes).toContain('512x512');
-      expect(constraints.sizes).toContain('1024x1024');
+    it('should give flexible sizes to gpt-image-2 and 2.5 only', () => {
+      expect(MODEL_CONSTRAINTS['gpt-image-2'].flexibleSize).toBeDefined();
+      expect(MODEL_CONSTRAINTS['gpt-image-2.5-flare'].flexibleSize).toBeDefined();
+      expect(MODEL_CONSTRAINTS['gpt-image-2.5-sunburst'].flexibleSize).toBeDefined();
+      expect(MODEL_CONSTRAINTS['gpt-image-1'].flexibleSize).toBeUndefined();
+      expect(MODEL_CONSTRAINTS['gpt-image-1.5'].flexibleSize).toBeUndefined();
+      expect(MODEL_CONSTRAINTS['gpt-image-1-mini'].flexibleSize).toBeUndefined();
     });
 
-    it('should have correct size constraints for dall-e-3', () => {
-      const constraints = MODEL_CONSTRAINTS['dall-e-3'];
-      expect(constraints.sizes).toContain('1024x1024');
-      expect(constraints.sizes).toContain('1792x1024');
-      expect(constraints.sizes).toContain('1024x1792');
+    it('should accept input_fidelity on the 1.x models only (2.5 rejection live-verified 2026-09-20)', () => {
+      expect(MODEL_CONSTRAINTS['gpt-image-2'].inputFidelity).toBeUndefined();
+      expect(MODEL_CONSTRAINTS['gpt-image-2.5-sunburst'].inputFidelity).toBeUndefined();
+      expect(MODEL_CONSTRAINTS['gpt-image-2.5-flare'].inputFidelity).toBeUndefined();
+      expect(MODEL_CONSTRAINTS['gpt-image-1'].inputFidelity).toEqual(['high', 'low']);
+      expect(MODEL_CONSTRAINTS['gpt-image-1-mini'].inputFidelity).toEqual(['high', 'low']);
+      expect(MODEL_CONSTRAINTS['gpt-image-1.5'].inputFidelity).toEqual(['high', 'low']);
     });
 
-    it('should have correct prompt length limits', () => {
-      expect(MODEL_CONSTRAINTS['dall-e-2'].promptMaxLength).toBe(1000);
-      expect(MODEL_CONSTRAINTS['dall-e-3'].promptMaxLength).toBe(4000);
-      expect(MODEL_CONSTRAINTS['gpt-image-1'].promptMaxLength).toBe(32000);
+    it('should have 32k prompt limit and n 1-10 everywhere', () => {
+      for (const c of Object.values(MODEL_CONSTRAINTS)) {
+        expect(c.promptMaxLength).toBe(32000);
+        expect(c.n).toEqual({ min: 1, max: 10 });
+        expect(c.supportsEdit).toBe(true);
+        expect(c.editMaxImages).toBe(16);
+      }
     });
 
-    it('should indicate dall-e-3 only supports n=1', () => {
-      const constraints = MODEL_CONSTRAINTS['dall-e-3'];
-      expect(constraints.n.max).toBe(1);
+    it('getModelConstraints should resolve snapshots and reject unknowns', () => {
+      expect(getModelConstraints('gpt-image-2-2026-04-21')).toBe(MODEL_CONSTRAINTS['gpt-image-2']);
+      expect(getModelConstraints('dall-e-3')).toBeNull();
+    });
+  });
+
+  describe('validateFlexibleSize', () => {
+    const rule = MODEL_CONSTRAINTS['gpt-image-2'].flexibleSize!;
+
+    it('should accept documented sizes', () => {
+      for (const size of ['1536x864', '2048x2048', '2048x1152', '3840x2160', '2160x3840', '1024x1024']) {
+        expect(validateFlexibleSize(size, rule)).toEqual([]);
+      }
     });
 
-    it('should indicate which models support edit/variation', () => {
-      expect(MODEL_CONSTRAINTS['dall-e-2'].supportsEdit).toBe(true);
-      expect(MODEL_CONSTRAINTS['dall-e-2'].supportsVariation).toBe(true);
-      expect(MODEL_CONSTRAINTS['dall-e-3'].supportsEdit).toBe(false);
-      expect(MODEL_CONSTRAINTS['dall-e-3'].supportsVariation).toBe(false);
-      expect(MODEL_CONSTRAINTS['gpt-image-1'].supportsEdit).toBe(true);
-      expect(MODEL_CONSTRAINTS['gpt-image-1'].supportsVariation).toBe(false);
+    it('should reject non-multiples of 16', () => {
+      expect(validateFlexibleSize('1000x1000', rule).join()).toMatch(/multiples of 16/);
+    });
+
+    it('should reject edges above 3840', () => {
+      expect(validateFlexibleSize('4096x1376', rule).join()).toMatch(/exceed 3840/);
+    });
+
+    it('should reject aspect ratios beyond 3:1', () => {
+      // 3072x1024 is exactly 3:1 and passes; 3088x1024 does not
+      expect(validateFlexibleSize('3072x1024', rule)).toEqual([]);
+      expect(validateFlexibleSize('3088x1024', rule).join()).toMatch(/aspect ratio/);
+    });
+
+    it('should reject too few or too many pixels', () => {
+      expect(validateFlexibleSize('512x512', rule).join()).toMatch(/total pixels/);
+      expect(validateFlexibleSize('3840x2176', rule).join()).toMatch(/total pixels|exceed/);
+    });
+
+    it('should reject malformed strings', () => {
+      expect(validateFlexibleSize('big', rule).join()).toMatch(/WIDTHxHEIGHT/);
+      expect(validateFlexibleSize('1024x', rule).join()).toMatch(/WIDTHxHEIGHT/);
+    });
+
+    it('should report multiple violations at once', () => {
+      // odd multiple, over-wide, over-ratio
+      const errors = validateFlexibleSize('4000x1000', rule);
+      expect(errors.length).toBeGreaterThanOrEqual(3);
     });
   });
 
   describe('validateModelParams', () => {
-    it('should validate dall-e-2 parameters successfully', () => {
-      const params = {
+    it('should validate flare parameters successfully', () => {
+      const result = validateModelParams('gpt-image-2.5-flare', {
         prompt: 'a cat',
-        size: '1024x1024',
-        n: 2
-      };
-      const result = validateModelParams('dall-e-2', params);
+        size: '1536x1024',
+        quality: 'max',
+        n: 2,
+        background: 'transparent',
+        output_format: 'webp',
+        output_compression: 80,
+        moderation: 'low',
+      });
       expect(result.valid).toBe(true);
-      expect(result.errors).toHaveLength(0);
+      expect(result.errors).toEqual([]);
     });
 
-    it('should reject invalid size for dall-e-2', () => {
-      const params = {
-        prompt: 'a cat',
-        size: '2048x2048'
-      };
-      const result = validateModelParams('dall-e-2', params);
+    it('should accept free-form sizes on flexible models', () => {
+      expect(validateModelParams('gpt-image-2', { size: '2048x1152' }).valid).toBe(true);
+      expect(validateModelParams('gpt-image-2.5-sunburst', { size: '1536x864' }).valid).toBe(true);
+    });
+
+    it('should reject free-form sizes on gpt-image-1.x', () => {
+      const result = validateModelParams('gpt-image-1.5', { size: '1536x864' });
       expect(result.valid).toBe(false);
-      expect(result.errors[0]).toContain('Invalid size');
+      expect(result.errors[0]).toMatch(/Invalid size "1536x864" for gpt-image-1.5/);
     });
 
-    it('should reject prompt exceeding max length', () => {
-      const longPrompt = 'a'.repeat(1001);
-      const params = {
-        prompt: longPrompt
-      };
-      const result = validateModelParams('dall-e-2', params);
+    it('should reject an invalid free-form size with the rule that failed', () => {
+      const result = validateModelParams('gpt-image-2', { size: '1000x1000' });
       expect(result.valid).toBe(false);
-      expect(result.errors[0]).toContain('exceeds maximum length');
+      expect(result.errors.join()).toMatch(/multiples of 16/);
     });
 
-    it('should validate dall-e-3 style parameter', () => {
-      const params = {
-        prompt: 'a cat',
-        style: 'vivid' as const
-      };
-      const result = validateModelParams('dall-e-3', params);
-      expect(result.valid).toBe(true);
+    it('should reject xhigh and max on gpt-image-2', () => {
+      expect(validateModelParams('gpt-image-2', { quality: 'xhigh' }).valid).toBe(false);
+      expect(validateModelParams('gpt-image-2', { quality: 'max' }).valid).toBe(false);
+      expect(validateModelParams('gpt-image-2', { quality: 'high' }).valid).toBe(true);
     });
 
-    it('should reject invalid style for dall-e-3', () => {
-      const params = {
-        prompt: 'a cat',
-        style: 'invalid' as 'vivid'
-      };
-      const result = validateModelParams('dall-e-3', params);
+    it('should reject prompt exceeding 32000 characters', () => {
+      const result = validateModelParams('gpt-image-2.5-flare', { prompt: 'a'.repeat(32001) });
       expect(result.valid).toBe(false);
-      expect(result.errors[0]).toContain('Invalid style');
+      expect(result.errors[0]).toMatch(/exceeds maximum length/);
     });
 
-    it('should reject n > 1 for dall-e-3', () => {
-      const params = {
-        prompt: 'a cat',
-        n: 3
-      };
-      const result = validateModelParams('dall-e-3', params);
+    it('should reject n outside 1-10 or non-integer', () => {
+      expect(validateModelParams('gpt-image-2.5-flare', { n: 0 }).valid).toBe(false);
+      expect(validateModelParams('gpt-image-2.5-flare', { n: 11 }).valid).toBe(false);
+      expect(validateModelParams('gpt-image-2.5-flare', { n: 1.5 }).valid).toBe(false);
+      expect(validateModelParams('gpt-image-2.5-flare', { n: 10 }).valid).toBe(true);
+    });
+
+    it('should reject transparent background with jpeg output', () => {
+      const result = validateModelParams('gpt-image-2.5-flare', {
+        background: 'transparent',
+        output_format: 'jpeg',
+      });
       expect(result.valid).toBe(false);
-      expect(result.errors[0]).toContain('must be between 1 and 1');
+      expect(result.errors[0]).toMatch(/requires output_format "png" or "webp"/);
+    });
+
+    it('should reject output_compression without jpeg/webp', () => {
+      expect(validateModelParams('gpt-image-2.5-flare', { output_compression: 50 }).valid).toBe(false);
+      expect(
+        validateModelParams('gpt-image-2.5-flare', { output_compression: 50, output_format: 'png' }).valid
+      ).toBe(false);
+      expect(
+        validateModelParams('gpt-image-2.5-flare', { output_compression: 50, output_format: 'jpeg' }).valid
+      ).toBe(true);
+    });
+
+    it('should reject output_compression outside 0-100', () => {
+      const result = validateModelParams('gpt-image-2.5-flare', {
+        output_compression: 101,
+        output_format: 'webp',
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors[0]).toMatch(/between 0 and 100/);
+    });
+
+    it('should reject input_fidelity on gpt-image-2 and the 2.5 models', () => {
+      for (const model of ['gpt-image-2', 'gpt-image-2.5-sunburst', 'gpt-image-2.5-flare']) {
+        const result = validateModelParams(model, { input_fidelity: 'high' });
+        expect(result.valid).toBe(false);
+        expect(result.errors[0]).toMatch(new RegExp(`not accepted by ${model.replace('.', '\\.')}`));
+      }
+    });
+
+    it('should accept input_fidelity on the 1.x models', () => {
+      expect(validateModelParams('gpt-image-1.5', { input_fidelity: 'high' }).valid).toBe(true);
+      expect(validateModelParams('gpt-image-1-mini', { input_fidelity: 'low' }).valid).toBe(true);
+    });
+
+    it('should bound partial_images to 0-3 integers', () => {
+      expect(validateModelParams('gpt-image-2.5-flare', { partial_images: 0 }).valid).toBe(true);
+      expect(validateModelParams('gpt-image-2.5-flare', { partial_images: 3 }).valid).toBe(true);
+      expect(validateModelParams('gpt-image-2.5-flare', { partial_images: 4 }).valid).toBe(false);
+      expect(validateModelParams('gpt-image-2.5-flare', { partial_images: -1 }).valid).toBe(false);
+    });
+
+    it('should reject invalid moderation and background values', () => {
+      expect(
+        validateModelParams('gpt-image-2.5-flare', { moderation: 'none' as unknown as 'auto' }).valid
+      ).toBe(false);
+      expect(
+        validateModelParams('gpt-image-2.5-flare', { background: 'blue' as unknown as 'auto' }).valid
+      ).toBe(false);
     });
 
     it('should return error for unknown model', () => {
-      const result = validateModelParams('unknown-model', {});
+      const result = validateModelParams('dall-e-3', { prompt: 'x' });
       expect(result.valid).toBe(false);
-      expect(result.errors[0]).toContain('Unknown model');
-    });
-  });
-
-  describe('getModelConstraints', () => {
-    it('should return constraints for valid model', () => {
-      const constraints = getModelConstraints('dall-e-2');
-      expect(constraints).toBeDefined();
-      expect(constraints?.sizes).toBeDefined();
+      expect(result.errors).toEqual(['Unknown model: dall-e-3']);
     });
 
-    it('should return null for invalid model', () => {
-      const constraints = getModelConstraints('invalid-model');
-      expect(constraints).toBeNull();
-    });
-  });
-
-  describe('Constants', () => {
-    it('should have all model mappings', () => {
-      expect(MODELS['dalle-2']).toBe('dall-e-2');
-      expect(MODELS['dalle-3']).toBe('dall-e-3');
-      expect(MODELS['gpt-image-1']).toBe('gpt-image-1');
-    });
-
-    it('should have all endpoints', () => {
-      expect(ENDPOINTS.generate).toBe('/v1/images/generations');
-      expect(ENDPOINTS.edit).toBe('/v1/images/edits');
-      expect(ENDPOINTS.variation).toBe('/v1/images/variations');
-    });
-  });
-
-  describe('Video Configuration (Sora)', () => {
-    describe('VIDEO_ENDPOINTS', () => {
-      it('should have all video endpoints defined', () => {
-        expect(VIDEO_ENDPOINTS.create).toBe('/v1/videos');
-        expect(VIDEO_ENDPOINTS.retrieve).toBe('/v1/videos/{video_id}');
-        expect(VIDEO_ENDPOINTS.content).toBe('/v1/videos/{video_id}/content');
-        expect(VIDEO_ENDPOINTS.remix).toBe('/v1/videos/{video_id}/remix');
-        expect(VIDEO_ENDPOINTS.list).toBe('/v1/videos');
-        expect(VIDEO_ENDPOINTS.delete).toBe('/v1/videos/{video_id}');
-      });
-    });
-
-    describe('VIDEO_MODELS', () => {
-      it('should have sora-2 model mapping', () => {
-        expect(VIDEO_MODELS['sora-2']).toBe('sora-2');
-      });
-
-      it('should have sora-2-pro model mapping', () => {
-        expect(VIDEO_MODELS['sora-2-pro']).toBe('sora-2-pro');
-      });
-    });
-
-    describe('VIDEO_MODEL_CONSTRAINTS', () => {
-      it('should have constraints for all video models', () => {
-        expect(VIDEO_MODEL_CONSTRAINTS['sora-2']).toBeDefined();
-        expect(VIDEO_MODEL_CONSTRAINTS['sora-2-pro']).toBeDefined();
-      });
-
-      it('should have correct size constraints for sora-2', () => {
-        const constraints = VIDEO_MODEL_CONSTRAINTS['sora-2'];
-        expect(constraints.sizes).toContain('720x1280');
-        expect(constraints.sizes).toContain('1280x720');
-        expect(constraints.sizes).toContain('1024x1792');
-        expect(constraints.sizes).toContain('1792x1024');
-      });
-
-      it('should have correct duration constraints for sora-2', () => {
-        const constraints = VIDEO_MODEL_CONSTRAINTS['sora-2'];
-        expect(constraints.seconds).toEqual([4, 8, 12]);
-      });
-    });
-
-    describe('validateVideoParams', () => {
-      it('should validate sora-2 parameters successfully', () => {
-        const params = {
-          prompt: 'a cat on a motorcycle',
-          size: '1280x720',
-          seconds: 8
-        };
-        const result = validateVideoParams('sora-2', params);
-        expect(result.valid).toBe(true);
-        expect(result.errors).toHaveLength(0);
-      });
-
-      it('should reject invalid size for sora-2', () => {
-        const params = {
-          prompt: 'a cat',
-          size: '1920x1080'  // Not valid for Sora
-        };
-        const result = validateVideoParams('sora-2', params);
-        expect(result.valid).toBe(false);
-        expect(result.errors[0]).toContain('Invalid size');
-      });
-
-      it('should reject invalid duration', () => {
-        const params = {
-          prompt: 'a cat',
-          seconds: 15  // Not valid: must be 4, 8, or 12
-        };
-        const result = validateVideoParams('sora-2', params);
-        expect(result.valid).toBe(false);
-        expect(result.errors[0]).toContain('Invalid duration');
-      });
-
-      it('should return error for unknown video model', () => {
-        const result = validateVideoParams('unknown-model', {});
-        expect(result.valid).toBe(false);
-        expect(result.errors[0]).toContain('Unknown video model');
-      });
-    });
-
-    describe('getVideoModelConstraints', () => {
-      it('should return constraints for valid video model', () => {
-        const constraints = getVideoModelConstraints('sora-2');
-        expect(constraints).toBeDefined();
-        expect(constraints?.sizes).toBeDefined();
-        expect(constraints?.seconds).toBeDefined();
-      });
-
-      it('should return null for invalid model', () => {
-        const constraints = getVideoModelConstraints('invalid-model');
-        expect(constraints).toBeNull();
-      });
+    it('should validate snapshots with the family constraints', () => {
+      expect(validateModelParams('gpt-image-2.5-flare-2026-09-08', { quality: 'max' }).valid).toBe(true);
+      expect(validateModelParams('gpt-image-2-2026-04-21', { quality: 'max' }).valid).toBe(false);
     });
   });
 });
