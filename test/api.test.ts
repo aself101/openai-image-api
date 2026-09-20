@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import axios from 'axios';
 import { Readable } from 'stream';
-import { OpenAIImageAPI } from '../src/api.js';
+import { OpenAIImageAPI, OpenAIImageAPIError } from '../src/api.js';
 import type { ImageGenerationStreamEvent } from '../src/types.js';
 
 // Mock axios
@@ -250,6 +250,52 @@ describe('OpenAIImageAPI', () => {
       });
       await expect(api.generateImage({ prompt: 'a cat' })).rejects.toThrow('Bad request: Invalid parameters');
     });
+
+    it('should expose status, code, type, apiMessage and cause on the thrown error', async () => {
+      const original = {
+        response: {
+          status: 400,
+          data: { error: { message: 'prompt rejected', code: 'moderation_blocked', type: 'image_generation_user_error' } },
+        },
+      };
+      (axios.post as Mock).mockRejectedValue(original);
+      const err = await api.generateImage({ prompt: 'a cat' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(OpenAIImageAPIError);
+      const typed = err as OpenAIImageAPIError;
+      expect(typed.name).toBe('OpenAIImageAPIError');
+      expect(typed.status).toBe(400);
+      expect(typed.code).toBe('moderation_blocked');
+      expect(typed.type).toBe('image_generation_user_error');
+      expect(typed.apiMessage).toBe('prompt rejected');
+      expect(typed.cause).toBe(original);
+    });
+
+    it('should keep the raw API message on apiMessage even when production sanitizes the message', async () => {
+      process.env.NODE_ENV = 'production';
+      (axios.post as Mock).mockRejectedValue({
+        response: { status: 400, data: { error: { message: 'size not supported', code: 'invalid_size' } } },
+      });
+      const err = (await api.generateImage({ prompt: 'a cat' }).catch((e: unknown) => e)) as OpenAIImageAPIError;
+      expect(err.message).toBe('Bad request: Invalid request parameters');
+      expect(err.apiMessage).toBe('size not supported');
+      expect(err.code).toBe('invalid_size');
+      delete process.env.NODE_ENV;
+    });
+
+    it('should reject a 200 body without a data[] array as an unexpected shape', async () => {
+      (axios.post as Mock).mockResolvedValue({ status: 200, data: { created: 1 } });
+      await expect(api.generateImage({ prompt: 'a cat' })).rejects.toThrow('Unexpected response shape');
+      (axios.post as Mock).mockResolvedValue({ status: 200, data: 'not json at all' });
+      await expect(api.generateImage({ prompt: 'a cat' })).rejects.toThrow('Unexpected response shape');
+    });
+
+    it('should not send partial_images on a buffered request', async () => {
+      (axios.post as Mock).mockResolvedValue(okResponse);
+      await api.generateImage({ prompt: 'x', partial_images: 2 } as Parameters<typeof api.generateImage>[0]);
+      const payload = (axios.post as Mock).mock.calls[0][1] as Record<string, unknown>;
+      expect(payload).not.toHaveProperty('partial_images');
+      expect(payload).not.toHaveProperty('stream');
+    });
   });
 
   describe('generateImageEdit', () => {
@@ -430,11 +476,59 @@ describe('OpenAIImageAPI', () => {
       expect(result.data[0].b64_json).toBe(completed.b64_json);
     });
 
-    it('should surface a terminal error event as a thrown error', async () => {
-      const body = sseBody([{ event: 'error', data: { type: 'error', error: { message: 'content policy' } } }]);
-      (axios.post as Mock).mockResolvedValue({ data: Readable.from([body]) });
+    it('should surface a terminal error event as a thrown error (nested and flat shapes)', async () => {
+      (axios.post as Mock).mockResolvedValue({
+        data: Readable.from([sseBody([{ event: 'error', data: { type: 'error', error: { message: 'content policy' } } }])]),
+      });
+      const err = (await api.generateImageStream({ prompt: 'a river' }).catch((e: unknown) => e)) as OpenAIImageAPIError;
+      expect(err).toBeInstanceOf(OpenAIImageAPIError);
+      expect(err.message).toBe('Stream error: content policy');
+      expect(err.type).toBe('stream_error');
 
-      await expect(api.generateImageStream({ prompt: 'a river' })).rejects.toThrow('Stream error: content policy');
+      (axios.post as Mock).mockResolvedValue({
+        data: Readable.from([sseBody([{ event: 'error', data: { type: 'error', message: 'flat shape' } }])]),
+      });
+      await expect(api.generateImageStream({ prompt: 'a river' })).rejects.toThrow('Stream error: flat shape');
+    });
+
+    it('should skip a typed event that carries no b64_json', async () => {
+      const body =
+        sseBody([{ event: 'image_generation.partial_image', data: { type: 'image_generation.partial_image', partial_image_index: 0 } }]) +
+        sseBody([{ event: 'image_generation.completed', data: completed }]);
+      (axios.post as Mock).mockResolvedValue({ data: Readable.from([body]) });
+      const seen: number[] = [];
+      const result = await api.generateImageStream({ prompt: 'x' }, { onPartialImage: (e) => void seen.push(e.partial_image_index) });
+      expect(seen).toEqual([]);
+      expect(result.data[0].b64_json).toBe(completed.b64_json);
+    });
+
+    it('should destroy the response stream when the consumer breaks out early', async () => {
+      const body = sseBody([
+        { event: 'image_generation.partial_image', data: partial0 },
+        { event: 'image_generation.partial_image', data: partial1 },
+        { event: 'image_generation.completed', data: completed },
+      ]);
+      const stream = Readable.from([body]);
+      (axios.post as Mock).mockResolvedValue({ data: stream });
+
+      for await (const e of api.streamImage({ prompt: 'x' })) {
+        if (e.type === 'image_generation.partial_image') break;
+      }
+      expect(stream.destroyed).toBe(true);
+    });
+
+    it('should translate a mid-body stream failure into the package error vocabulary', async () => {
+      const stream = new Readable({
+        read() {
+          this.push('event: image_generation.partial_image\n');
+          this.destroy(Object.assign(new Error('aborted'), { code: 'ECONNRESET' }));
+        },
+      });
+      (axios.post as Mock).mockResolvedValue({ data: stream });
+      const err = (await api.generateImageStream({ prompt: 'x' }).catch((e: unknown) => e)) as OpenAIImageAPIError;
+      expect(err).toBeInstanceOf(OpenAIImageAPIError);
+      expect(err.message).toBe('Request failed: aborted');
+      expect((err.cause as { code?: string }).code).toBe('ECONNRESET');
     });
 
     it('should recover the JSON error body from a failed stream response', async () => {
@@ -662,6 +756,22 @@ describe('OpenAIImageAPI', () => {
       const elapsed = Date.now() - startTime;
 
       expect(elapsed).toBeGreaterThanOrEqual(90); // Allow small margin
+    });
+
+    it('should space concurrent callers on one instance, not release them as a burst', async () => {
+      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test123', rateLimitDelay: 60 }) as OpenAIImageAPI & TestableAPI;
+      const times: number[] = [];
+      vi.mocked(axios.post).mockImplementation(async () => {
+        times.push(Date.now());
+        return { data: { created: 1, data: [{ b64_json: 'x' }] } };
+      });
+
+      await Promise.all([1, 2, 3, 4].map(() => testApi._makeRequest('POST', '/test', {})));
+
+      times.sort((a, b) => a - b);
+      for (let i = 1; i < times.length; i++) {
+        expect(times[i] - times[i - 1]).toBeGreaterThanOrEqual(50); // 60ms delay, small margin
+      }
     });
 
     it('should allow custom rate limit delay', () => {

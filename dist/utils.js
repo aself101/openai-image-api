@@ -95,10 +95,10 @@ export async function validateImagePath(filepath) {
     catch (error) {
         const code = getErrorCode(error);
         if (code === 'ENOENT') {
-            throw new Error(`Image file not found: ${filepath}`);
+            throw new Error(`Image file not found: ${filepath}`, { cause: error });
         }
         else if (code === 'EACCES') {
-            throw new Error(`Permission denied reading image file: ${filepath}`);
+            throw new Error(`Permission denied reading image file: ${filepath}`, { cause: error });
         }
         throw error;
     }
@@ -112,8 +112,9 @@ export async function validateImagePath(filepath) {
  * @throws Error if path contains traversal sequences or escapes base path
  */
 export function validateOutputPath(outputPath, basePath) {
-    // Check for obvious path traversal patterns
-    if (outputPath.includes('..')) {
+    // Reject a `..` path SEGMENT, not the substring: `my..dir` is a legal name.
+    // Both separators are split on so a Windows-style path is checked the same way.
+    if (outputPath.split(/[\\/]+/).includes('..')) {
         throw new Error('Path traversal sequences (..) are not allowed in output paths');
     }
     // Resolve to absolute path
@@ -212,7 +213,7 @@ export async function decodeBase64Image(b64Data, filepath) {
     catch (error) {
         const message = getErrorMessage(error);
         logger.error(`Error decoding base64 image: ${message}`);
-        throw new Error(`Failed to decode base64 image: ${message}`);
+        throw new Error(`Failed to decode base64 image: ${message}`, { cause: error });
     }
 }
 /**
@@ -357,12 +358,12 @@ export async function* parseSSEStream(stream) {
     };
     for await (const chunk of stream) {
         buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-        // Events end at a blank line; tolerate CRLF as well as LF
-        let boundary;
-        while ((boundary = buffer.search(/\r?\n\r?\n/)) !== -1) {
-            const delimiterLength = buffer.startsWith('\r', boundary) ? 4 : 2;
+        // Events end at a blank line; tolerate CRLF, LF, and a mixed pair
+        let match;
+        while ((match = /\r?\n\r?\n/.exec(buffer)) !== null) {
+            const boundary = match.index;
             const block = buffer.slice(0, boundary);
-            buffer = buffer.slice(boundary + delimiterLength);
+            buffer = buffer.slice(boundary + match[0].length);
             const parsed = flush(block);
             if (parsed)
                 yield parsed;

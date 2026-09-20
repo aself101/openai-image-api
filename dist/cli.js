@@ -25,7 +25,29 @@ import { getOutputDir, getModelConstraints, getModelDeprecation, isSupportedMode
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageJsonPath = path.join(__dirname, '..', 'package.json');
-const { version } = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+let version = '0.0.0';
+try {
+    version = JSON.parse(readFileSync(packageJsonPath, 'utf8')).version;
+}
+catch {
+    // A missing or malformed manifest only affects --version output
+}
+/**
+ * Exit once winston has flushed.
+ *
+ * `process.exit` right after `logger.error` drops the final line when stdout is
+ * a pipe with more than the 64 KB kernel buffer queued behind a slow reader —
+ * exactly the CI capture where the reason for a non-zero exit matters most.
+ * The timer is a backstop for a transport that never emits 'finish'.
+ */
+function exitAfterFlush(code) {
+    const timer = setTimeout(() => process.exit(code), 2000);
+    logger.once('finish', () => {
+        clearTimeout(timer);
+        process.exit(code);
+    });
+    logger.end();
+}
 const program = new Command();
 const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR'];
 const QUALITIES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -386,18 +408,21 @@ async function main() {
     }
     catch (error) {
         logger.error(`\n✗ Error: ${getErrorMessage(error)}\n`);
-        process.exit(1);
+        exitAfterFlush(1);
+        return;
     }
     try {
         // Show examples if requested
         if (options.examples) {
             showExamples();
-            process.exit(0);
+            exitAfterFlush(0);
+            return;
         }
         // Show help if no arguments provided
         if (!process.argv.slice(2).length) {
             program.outputHelp();
-            process.exit(0);
+            exitAfterFlush(0);
+            return;
         }
         setLogLevel(options.logLevel);
         const model = resolveModel(options);
@@ -445,6 +470,7 @@ async function main() {
         // options.prompt is non-empty here (checked above), so slice(0, 1) is one item.
         const prompts = operation === 'edit' ? options.prompt.slice(0, 1) : options.prompt;
         const editImage = options.image.length === 1 ? options.image.join('') : options.image;
+        const failed = [];
         for (const [i, prompt] of prompts.entries()) {
             const promptNum = prompts.length > 1 ? ` [${i + 1}/${prompts.length}]` : '';
             logger.info(`\n${'='.repeat(60)}`);
@@ -476,6 +502,7 @@ async function main() {
             catch (error) {
                 // A batch keeps going past one failed prompt; a single request surfaces it
                 if (prompts.length > 1) {
+                    failed.push(prompt);
                     logger.error('Continuing with next prompt...');
                 }
                 else {
@@ -483,13 +510,23 @@ async function main() {
                 }
             }
         }
+        // A batch with any failure exits non-zero so scripted callers see it;
+        // the summary names what did not render.
+        if (failed.length > 0) {
+            logger.error(`\n✗ ${failed.length} of ${prompts.length} prompt(s) failed:`);
+            failed.forEach((p) => logger.error(`  - "${p.substring(0, 60)}"`));
+            logger.error('');
+            exitAfterFlush(1);
+            return;
+        }
         logger.info('\n✓ All operations completed successfully!\n');
+        exitAfterFlush(0);
     }
     catch (error) {
         logger.error(`\n✗ Error: ${getErrorMessage(error)}\n`);
-        process.exit(1);
+        exitAfterFlush(1);
     }
 }
 // Run main function
-main();
+void main();
 //# sourceMappingURL=cli.js.map

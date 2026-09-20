@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/openai-image-api.svg)](https://www.npmjs.com/package/openai-image-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/openai-image-api)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-174%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-187%20passing-brightgreen)](test/)
 
 A Node.js wrapper for the [OpenAI Image API](https://developers.openai.com/api/reference/resources/images) — `/v1/images/generations` and `/v1/images/edits` — for the GPT Image model family: **GPT Image 2.5** (Sunburst, Flare), **GPT Image 2**, and the deprecated GPT Image 1.x models. Generate and edit images, with streaming partial-image delivery, via CLI or programmatic API.
 
@@ -542,7 +542,7 @@ npm run test:ui
 npm run test:coverage
 ```
 
-The suite has 174 tests across four files:
+The suite has 187 tests across four files:
 
 - **config** — model catalogue and deprecation table, flexible-size rules (multiples of 16, aspect ratio, pixel bounds), per-model quality gating, `input_fidelity` rejection, cross-field rules (transparent+jpeg, compression without jpeg/webp), snapshot resolution.
 - **api** — request payloads per model family, default model, deprecation warning once per model, streaming (SSE reassembly across chunk boundaries, event ordering, callback wrapper, error-body recovery from a failed stream, terminal error events), edit pre-flight, `saveImages`, security (HTTPS enforcement, key redaction, production error sanitisation, rate limiting).
@@ -553,6 +553,24 @@ Network calls are mocked. Live verification of streaming, editing, and the `inpu
 
 ## Error Handling
 
+Every failure from the API class is an `OpenAIImageAPIError` (exported from the main entry). The `message` is the stable human-readable vocabulary below; the fields let you branch without parsing it:
+
+```typescript
+import { OpenAIImageAPI, OpenAIImageAPIError } from 'openai-image-api';
+
+try {
+  await api.generateImage({ prompt });
+} catch (err) {
+  if (err instanceof OpenAIImageAPIError) {
+    err.status;      // HTTP status, when the API answered
+    err.code;        // API error.code — the stable discriminator
+    err.type;        // e.g. 'image_generation_user_error': fix the prompt/input, do not retry unchanged
+    err.apiMessage;  // the API's own message, even when NODE_ENV=production sanitizes err.message
+    err.cause;       // the original axios error
+  }
+}
+```
+
 | Error | Meaning |
 |---|---|
 | `Authentication failed. Please check your API key.` | 401 |
@@ -562,8 +580,9 @@ Network calls are mocked. Live verification of streaming, editing, and the `inpu
 | `Parameter validation failed:\n  - ...` | Rejected client-side before any request; lists every failing rule |
 | `Image file not found: <path>` / `File does not appear to be a valid image` | Edit input failed the pre-upload check |
 | `Unknown model "<id>". Supported: ...` | Model id not in the catalogue (DALL-E ids land here) |
-| `Stream error: <message>` | The API sent a terminal `error` event mid-stream |
+| `Stream error: <message>` | The API sent a terminal `error` event mid-stream (`type: 'stream_error'`) |
 | `Stream ended without an image_generation.completed event` | Connection closed early |
+| `Unexpected response shape from <endpoint>` | 200 without a `data[]` array |
 
 Example validation failure:
 
@@ -612,6 +631,9 @@ Other behaviour changes:
 - **`saveImages` `format` is optional** and defaults to the response's `output_format`.
 - **Output directories** are named by the full model id (`datasets/openai/gpt-image-2.5-flare/`), not a shortened alias.
 - New client-side rules: `background: transparent` with `output_format: jpeg` and `output_compression` without jpeg/webp are rejected before the request; edit inputs are magic-byte checked before upload.
+- **Batch exit code.** A `--prompt` batch with any failed prompt now exits 1 and lists the failures; 2.x printed the success banner and exited 0 even when every prompt failed.
+- **Rate limiting** is serialized across concurrent calls on one instance; 2.x spaced only sequential callers.
+- Errors are `OpenAIImageAPIError` instances with `status`/`code`/`type`/`apiMessage`/`cause`; messages are unchanged.
 - Removed utilities: `validateImageUrl`, `downloadImage`, `imageToBase64`, `validateImageFile`, `pause` (`openai-image-api/utils`). The first three served DALL-E URL responses; the package no longer fetches anything but the API itself. `RequestOptions` and `ImageFileConstraints` types are gone with them.
 
 ## Additional Resources

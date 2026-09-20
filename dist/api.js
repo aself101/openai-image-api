@@ -25,17 +25,78 @@
 import axios from 'axios';
 import FormData from 'form-data';
 import { createReadStream } from 'fs';
+import path from 'path';
 import { Readable } from 'stream';
 import winston from 'winston';
 import { getOpenAIApiKey, BASE_URL, ENDPOINTS, DEFAULT_MODEL, unknownModelMessage, validateModelParams, getModelConstraints, getModelDeprecation, } from './config.js';
 import { decodeBase64Image, parseSSEStream, readStreamToString, validateImagePath, getErrorMessage, } from './utils.js';
+/**
+ * Error thrown for every failed API interaction.
+ *
+ * `message` is the package's stable, human-readable vocabulary (kept from
+ * 2.x). The fields carry what a consumer needs to branch on without parsing
+ * the message: the HTTP `status`, and the API body's `code`/`type` when
+ * present — the guide names `error.code` as the stable discriminator and
+ * `image_generation_user_error` as the type for prompt/input problems that
+ * must not be retried unchanged. `cause` is the original axios error.
+ */
+export class OpenAIImageAPIError extends Error {
+    /** HTTP status, when the API answered at all */
+    status;
+    /** `error.code` from the API body, when present */
+    code;
+    /** `error.type` from the API body, when present */
+    type;
+    /** `error.message` from the API body, when present (unsanitized) */
+    apiMessage;
+    constructor(message, details = {}) {
+        super(message, details.cause === undefined ? undefined : { cause: details.cause });
+        this.name = 'OpenAIImageAPIError';
+        this.status = details.status;
+        this.code = details.code;
+        this.type = details.type;
+        this.apiMessage = details.apiMessage;
+    }
+}
+/** Read the API error body off an axios rejection, if it carries one */
+function apiErrorBody(error) {
+    const data = error?.response?.data;
+    if (typeof data !== 'object' || data === null)
+        return undefined;
+    const body = data.error;
+    if (typeof body !== 'object' || body === null)
+        return undefined;
+    const { message, code, type } = body;
+    return {
+        message: typeof message === 'string' ? message : undefined,
+        code: typeof code === 'string' ? code : undefined,
+        type: typeof type === 'string' ? type : undefined,
+    };
+}
 /** Narrow parsed SSE JSON to an object carrying a string `type` discriminator */
 function isTypedEvent(value) {
     return typeof value === 'object' && value !== null && typeof value.type === 'string';
 }
-/** Narrow a typed event to the API's error-event shape */
-function isStreamErrorEvent(value) {
-    return value.type === 'error';
+/**
+ * Narrow a typed event to an image-bearing event: the one field every
+ * partial/completed event must carry for the consumer to do anything with it.
+ */
+function isImageEvent(value) {
+    return typeof value.b64_json === 'string';
+}
+/**
+ * Read the message off a terminal `error` stream event. The Image API's
+ * streaming error shape is not in the reference we hold; both the nested
+ * `{ error: { message } }` and the flat `{ message }` (the Responses-API
+ * streaming convention) forms are accepted. [VERIFY against a live error event]
+ */
+function streamErrorMessage(value) {
+    const v = value;
+    if (typeof v.error?.message === 'string')
+        return v.error.message;
+    if (typeof v.message === 'string')
+        return v.message;
+    return 'unknown error';
 }
 /** Default per-request timeout; see APIOptions.requestTimeout for rationale */
 const DEFAULT_REQUEST_TIMEOUT = 180_000;
@@ -52,6 +113,12 @@ export class OpenAIImageAPI {
     rateLimitDelay;
     requestTimeout;
     lastRequestTime;
+    /**
+     * Serializes rate-limit waits. Without it, concurrent callers on one
+     * instance all read the same lastRequestTime, sleep the same delay, and fire
+     * together — the burst the limiter exists to prevent.
+     */
+    rateLimitQueue;
     /** Models already warned about, so a batch does not repeat the notice */
     deprecationWarned;
     /**
@@ -84,6 +151,7 @@ export class OpenAIImageAPI {
         this.rateLimitDelay = rateLimitDelay;
         this.requestTimeout = requestTimeout;
         this.lastRequestTime = 0;
+        this.rateLimitQueue = Promise.resolve();
         this.deprecationWarned = new Set();
         this.logger.info('OpenAIImageAPI initialized successfully');
     }
@@ -144,9 +212,7 @@ export class OpenAIImageAPI {
             return genericMessages[status] || 'An error occurred';
         }
         // In development, return detailed error messages
-        const apiMessage = error?.response?.data
-            ?.error?.message;
-        return apiMessage || getErrorMessage(error) || 'Unknown error';
+        return apiErrorBody(error)?.message || getErrorMessage(error) || 'Unknown error';
     }
     /**
      * Translate an axios failure into the package's error vocabulary.
@@ -155,41 +221,55 @@ export class OpenAIImageAPI {
      * @throws Error Always
      */
     _throwApiError(error) {
+        // Errors already in our vocabulary (e.g. a terminal stream event) pass through
+        if (error instanceof OpenAIImageAPIError)
+            throw error;
         this.logger.error(`API request failed: ${getErrorMessage(error)}`);
-        const axiosError = (error ?? {});
-        if (axiosError.response) {
-            const status = axiosError.response.status;
+        const response = error?.response;
+        if (response) {
+            const status = response.status;
+            const body = apiErrorBody(error);
+            // The raw API message is always logged at debug so a sanitized production
+            // message can still be traced by the operator holding the logs.
+            if (body?.message) {
+                this.logger.debug(`API error body: status=${status} type=${body.type ?? '-'} code=${body.code ?? '-'} message=${body.message}`);
+            }
             const sanitizedMessage = this._sanitizeErrorMessage(error, status);
+            const details = { status, code: body?.code, type: body?.type, apiMessage: body?.message, cause: error };
             if (status === 401) {
-                throw new Error('Authentication failed. Please check your API key.');
+                throw new OpenAIImageAPIError('Authentication failed. Please check your API key.', details);
             }
             else if (status === 400) {
-                throw new Error(`Bad request: ${sanitizedMessage}`);
+                throw new OpenAIImageAPIError(`Bad request: ${sanitizedMessage}`, details);
             }
             else if (status === 429) {
-                throw new Error('Rate limit exceeded. Please try again later.');
+                throw new OpenAIImageAPIError('Rate limit exceeded. Please try again later.', details);
             }
             else if (status === 500 || status === 502 || status === 503) {
-                throw new Error('OpenAI service error. Please try again later.');
+                throw new OpenAIImageAPIError('OpenAI service error. Please try again later.', details);
             }
             else {
-                throw new Error(`API error (${status}): ${sanitizedMessage}`);
+                throw new OpenAIImageAPIError(`API error (${status}): ${sanitizedMessage}`, details);
             }
         }
-        throw new Error(`Request failed: ${getErrorMessage(error)}`);
+        throw new OpenAIImageAPIError(`Request failed: ${getErrorMessage(error)}`, { cause: error });
     }
     /**
      * Enforce the minimum delay between requests, then stamp this one.
      */
-    async _rateLimit() {
-        const now = Date.now();
-        const timeSinceLastRequest = now - this.lastRequestTime;
-        if (this.lastRequestTime > 0 && timeSinceLastRequest < this.rateLimitDelay) {
-            const delay = this.rateLimitDelay - timeSinceLastRequest;
-            this.logger.debug(`Rate limit: waiting ${delay}ms before next request`);
-            await new Promise((resolve) => setTimeout(resolve, delay));
-        }
-        this.lastRequestTime = Date.now();
+    _rateLimit() {
+        const turn = this.rateLimitQueue.then(async () => {
+            const timeSinceLastRequest = Date.now() - this.lastRequestTime;
+            if (this.lastRequestTime > 0 && timeSinceLastRequest < this.rateLimitDelay) {
+                const delay = this.rateLimitDelay - timeSinceLastRequest;
+                this.logger.debug(`Rate limit: waiting ${delay}ms before next request`);
+                await new Promise((resolve) => setTimeout(resolve, delay));
+            }
+            this.lastRequestTime = Date.now();
+        });
+        // The chain must never reject or every later caller would be stuck
+        this.rateLimitQueue = turn.catch(() => undefined);
+        return turn;
     }
     /**
      * Build request headers, merging multipart boundary headers when present.
@@ -235,7 +315,11 @@ export class OpenAIImageAPI {
                 throw new Error(`Unsupported HTTP method: ${method}`);
             }
             this.logger.debug(`API request successful: ${method} ${endpoint}`);
-            return response.data;
+            const body = response.data;
+            if (typeof body !== 'object' || body === null || !Array.isArray(body.data)) {
+                throw new OpenAIImageAPIError(`Unexpected response shape from ${endpoint}: expected an object with a data[] array`, { status: response.status });
+            }
+            return body;
         }
         catch (error) {
             this._throwApiError(error);
@@ -272,38 +356,59 @@ export class OpenAIImageAPI {
             // Recover the JSON error body from the stream so the message is useful
             const response = error?.response;
             if (response && response.data instanceof Readable) {
+                let text = '';
                 try {
-                    response.data = JSON.parse(await readStreamToString(response.data));
+                    text = await readStreamToString(response.data);
+                    response.data = JSON.parse(text);
                 }
-                catch {
+                catch (parseError) {
+                    this.logger.debug(`Stream error body was not JSON (${getErrorMessage(parseError)}): ${text.slice(0, 500)}`);
                     response.data = undefined;
                 }
             }
             this._throwApiError(error);
         }
-        for await (const raw of parseSSEStream(stream)) {
-            if (!raw.data)
-                continue;
-            let parsed;
-            try {
-                parsed = JSON.parse(raw.data);
+        // Mid-body failures (idle timeout, connection reset) surface from the
+        // iterator, not from axios.post, so they are routed through the same
+        // translation as pre-headers failures.
+        try {
+            for await (const raw of parseSSEStream(stream)) {
+                if (!raw.data)
+                    continue;
+                let parsed;
+                try {
+                    parsed = JSON.parse(raw.data);
+                }
+                catch {
+                    this.logger.warn(`Skipping unparseable stream event (${raw.event ?? 'no event name'})`);
+                    continue;
+                }
+                if (!isTypedEvent(parsed)) {
+                    this.logger.warn(`Skipping stream event without a type field (${raw.event ?? 'no event name'})`);
+                    continue;
+                }
+                // The API may surface an error as a terminal event rather than a status
+                if (parsed.type === 'error') {
+                    throw new OpenAIImageAPIError(`Stream error: ${streamErrorMessage(parsed)}`, { type: 'stream_error' });
+                }
+                if (!isImageEvent(parsed)) {
+                    this.logger.warn(`Skipping ${parsed.type} event without b64_json`);
+                    continue;
+                }
+                // SAFETY: narrowed on `type` and `b64_json`, the two fields consumers
+                // branch on; the remaining documented fields are trusted, the same
+                // trust the non-streaming path places in axios's parsed JSON body.
+                yield parsed;
             }
-            catch {
-                this.logger.warn(`Skipping unparseable stream event (${raw.event ?? 'no event name'})`);
-                continue;
-            }
-            if (!isTypedEvent(parsed)) {
-                this.logger.warn(`Skipping stream event without a type field (${raw.event ?? 'no event name'})`);
-                continue;
-            }
-            // The API may surface an error as a terminal event rather than a status
-            if (isStreamErrorEvent(parsed)) {
-                throw new Error(`Stream error: ${parsed.error?.message ?? 'unknown error'}`);
-            }
-            // `type` is the only field the discriminated union is narrowed on; the
-            // remaining fields are trusted as documented, the same trust the
-            // non-streaming path places in axios's parsed JSON body.
-            yield parsed;
+        }
+        catch (error) {
+            this._throwApiError(error);
+        }
+        finally {
+            // Whether the loop completed, threw, or the consumer broke out early,
+            // release the socket rather than leaving the response half-read.
+            if (!stream.destroyed)
+                stream.destroy();
         }
     }
     /**
@@ -328,10 +433,13 @@ export class OpenAIImageAPI {
             payload.moderation = moderation;
         if (user)
             payload.user = user;
-        if (stream)
+        // partial_images is meaningful only on a streaming request; a buffered
+        // call that carries it (JS caller, spread object) would be a likely 400
+        if (stream) {
             payload.stream = true;
-        if (partial_images !== undefined)
-            payload.partial_images = partial_images;
+            if (partial_images !== undefined)
+                payload.partial_images = partial_images;
+        }
         return payload;
     }
     /**
@@ -367,10 +475,11 @@ export class OpenAIImageAPI {
             formData.append('moderation', moderation);
         if (user)
             formData.append('user', user);
-        if (stream)
+        if (stream) {
             formData.append('stream', 'true');
-        if (partial_images !== undefined)
-            formData.append('partial_images', partial_images.toString());
+            if (partial_images !== undefined)
+                formData.append('partial_images', partial_images.toString());
+        }
         return formData;
     }
     /**
@@ -566,7 +675,7 @@ export class OpenAIImageAPI {
         const savedPaths = [];
         for (const [i, imageData] of response.data.entries()) {
             const filename = response.data.length > 1 ? `${baseFilename}_${i + 1}.${ext}` : `${baseFilename}.${ext}`;
-            const filepath = `${outputDir}/${filename}`;
+            const filepath = path.join(outputDir, filename);
             if (!imageData.b64_json) {
                 this.logger.warn(`No image data found for index ${i}`);
                 continue;

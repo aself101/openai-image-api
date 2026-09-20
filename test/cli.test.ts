@@ -112,6 +112,22 @@ describe('CLI (dist/cli.js)', () => {
     expect(out).toContain('Path traversal sequences');
   });
 
+  it('exits non-zero when every prompt in a batch fails, and names them', () => {
+    // Over-long prompts fail client-side validation inside the request path, so no network is touched
+    const tooLong = 'a'.repeat(32001);
+    const { code, out } = run('--prompt', tooLong, '--prompt', `${tooLong}b`);
+    expect(code).toBe(1);
+    expect(out).toContain('2 of 2 prompt(s) failed');
+    expect(out).not.toContain('All operations completed successfully');
+  });
+
+  it('exits non-zero when some prompts in a batch fail', () => {
+    // First prompt is only validated (dry-run does not apply here), so make both invalid but distinct sizes
+    const { code, out } = run('--gpt-image-2', '--prompt', 'ok', '--prompt', 'x'.repeat(32001), '--size', '1000x1000');
+    expect(code).toBe(1);
+    expect(out).toContain('of 2 prompt(s) failed');
+  });
+
   it('exposes no Sora or DALL-E flags', () => {
     const { out } = run('--help');
     expect(out).not.toMatch(/--video|--sora|--dalle|--variation|--response-format|--style/);

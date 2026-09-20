@@ -340,6 +340,14 @@ describe('Utility Functions', () => {
       ]);
     });
 
+    it('should handle a mixed CR/LF delimiter without eating the next event', async () => {
+      const events = await collect(Readable.from(['event: a\ndata: 1\r\n\nevent: b\ndata: 2\n\n']));
+      expect(events).toEqual([
+        { event: 'a', data: '1' },
+        { event: 'b', data: '2' },
+      ]);
+    });
+
     it('should flush a trailing event with no terminating blank line', async () => {
       const events = await collect(Readable.from(['event: last\ndata: fin']));
       expect(events).toEqual([{ event: 'last', data: 'fin' }]);
@@ -383,6 +391,15 @@ describe('Utility Functions', () => {
     it('should reject paths with .. traversal sequences', () => {
       expect(() => validateOutputPath('/tmp/../etc/passwd'))
         .toThrow('Path traversal sequences (..) are not allowed');
+    });
+
+    it('should accept directory names that merely contain two dots', () => {
+      expect(validateOutputPath('my..dir')).toMatch(/my\.\.dir$/);
+      expect(validateOutputPath('/tmp/renders/v1..2')).toBe('/tmp/renders/v1..2');
+    });
+
+    it('should reject a .. segment written with backslashes', () => {
+      expect(() => validateOutputPath('out\\..\\etc')).toThrow('Path traversal sequences');
     });
 
     it('should reject paths with embedded .. sequences', () => {
