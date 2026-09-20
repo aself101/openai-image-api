@@ -165,11 +165,10 @@ describe('OpenAIImageAPI', () => {
       expect(payload).not.toHaveProperty('stream');
     });
 
-    it('should accept xhigh/max and free-form sizes on 2.5', async () => {
+    it('should send xhigh/max and free-form sizes verbatim on 2.5', async () => {
       (axios.post as Mock).mockResolvedValue(okResponse);
-      await expect(
-        api.generateImage({ prompt: 'x', model: 'gpt-image-2.5-sunburst', quality: 'max', size: '2048x1152' })
-      ).resolves.toBeDefined();
+      await api.generateImage({ prompt: 'x', model: 'gpt-image-2.5-sunburst', quality: 'max', size: '2048x1152' });
+      expect((axios.post as Mock).mock.calls[0][1]).toMatchObject({ quality: 'max', size: '2048x1152' });
     });
 
     it('should send dated snapshots verbatim', async () => {
@@ -199,7 +198,19 @@ describe('OpenAIImageAPI', () => {
     it('should reject removed models', async () => {
       await expect(
         api.generateImage({ prompt: 'a cat', model: 'dall-e-3' as unknown as 'gpt-image-2' })
-      ).rejects.toThrow('Unknown model: dall-e-3');
+      ).rejects.toThrow('Unknown model "dall-e-3". Supported:');
+    });
+
+    it('should refuse every request path when the API key is empty', async () => {
+      // Reaches the guard through the public methods, not by calling the private check directly
+      api.apiKey = '';
+      await expect(api.generateImage({ prompt: 'a cat' })).rejects.toThrow('API key not set');
+      await expect(api.generateImageEdit({ image: '/p/a.png', prompt: 'x' })).rejects.toThrow('API key not set');
+      await expect(api.generateImageStream({ prompt: 'a cat' })).rejects.toThrow('API key not set');
+      await expect(api.generateImageEditStream({ image: '/p/a.png', prompt: 'x' })).rejects.toThrow(
+        'API key not set'
+      );
+      expect(axios.post).not.toHaveBeenCalled();
     });
 
     it('should warn once per deprecated model', async () => {
@@ -242,11 +253,53 @@ describe('OpenAIImageAPI', () => {
   });
 
   describe('generateImageEdit', () => {
-    it('should require valid image file path', async () => {
-      // Throws because the file does not exist (createReadStream errors on open)
+    it('should reject a missing image file before any request', async () => {
       await expect(
         api.generateImageEdit({ image: '/nonexistent/path/image.png', prompt: 'add a hat' })
-      ).rejects.toThrow();
+      ).rejects.toThrow('Image file not found: /nonexistent/path/image.png');
+      expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    it('should reject a non-image file before any request', async () => {
+      const fs = await import('fs/promises');
+      const os = await import('os');
+      const pathMod = await import('path');
+      const dir = await fs.mkdtemp(pathMod.join(os.tmpdir(), 'openai-img-'));
+      const fake = pathMod.join(dir, 'not-an-image.png');
+      await fs.writeFile(fake, 'hello, not a png');
+      try {
+        await expect(api.generateImageEdit({ image: fake, prompt: 'x' })).rejects.toThrow(
+          'does not appear to be a valid image'
+        );
+        expect(axios.post).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('should post a multipart form with image[] parts for a real PNG', async () => {
+      const fs = await import('fs/promises');
+      const os = await import('os');
+      const pathMod = await import('path');
+      const dir = await fs.mkdtemp(pathMod.join(os.tmpdir(), 'openai-img-'));
+      const png = pathMod.join(dir, 'real.png');
+      await fs.writeFile(png, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]));
+      (axios.post as Mock).mockResolvedValue(okResponse);
+      try {
+        await api.generateImageEdit({ image: [png, png], prompt: 'combine', model: 'gpt-image-2.5-sunburst', quality: 'high' });
+        const [url, form, config] = (axios.post as Mock).mock.calls[0];
+        expect(url).toBe('https://api.openai.com/v1/images/edits');
+        // form-data cannot buffer file streams; its part headers are the string entries of _streams
+        const parts = (form as unknown as { _streams: unknown[] })._streams;
+        const body = parts.filter((x): x is string => typeof x === 'string').join('');
+        expect(body.match(/name="image\[\]"/g)).toHaveLength(2);
+        expect(body).toMatch(/name="model"\r\n\r\ngpt-image-2.5-sunburst/);
+        expect(body).toMatch(/name="quality"\r\n\r\nhigh/);
+        expect(body).not.toMatch(/name="response_format"/);
+        expect(config.headers['content-type']).toMatch(/^multipart\/form-data; boundary=/);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
     });
 
     it('should throw error if image is missing', async () => {
@@ -278,7 +331,7 @@ describe('OpenAIImageAPI', () => {
     it('should reject unknown models', async () => {
       await expect(
         api.generateImageEdit({ image: '/p/a.png', prompt: 'x', model: 'dall-e-2' as unknown as 'gpt-image-2' })
-      ).rejects.toThrow('Unknown model: dall-e-2');
+      ).rejects.toThrow('Unknown model "dall-e-2". Supported:');
     });
   });
 
@@ -366,6 +419,17 @@ describe('OpenAIImageAPI', () => {
       );
     });
 
+    it('should skip events without a string type field', async () => {
+      const body =
+        'data: {"no_type":true}\n\n' +
+        'data: "just a string"\n\n' +
+        sseBody([{ event: 'image_generation.completed', data: completed }]);
+      (axios.post as Mock).mockResolvedValue({ data: Readable.from([body]) });
+
+      const result = await api.generateImageStream({ prompt: 'x' });
+      expect(result.data[0].b64_json).toBe(completed.b64_json);
+    });
+
     it('should surface a terminal error event as a thrown error', async () => {
       const body = sseBody([{ event: 'error', data: { type: 'error', error: { message: 'content policy' } } }]);
       (axios.post as Mock).mockResolvedValue({ data: Readable.from([body]) });
@@ -416,7 +480,14 @@ describe('OpenAIImageAPI', () => {
   describe('Error Handling', () => {
     it('should handle network errors', async () => {
       (axios.post as Mock).mockRejectedValue(new Error('Network error'));
-      await expect(api.generateImage({ prompt: 'a cat' })).rejects.toThrow('Request failed');
+      await expect(api.generateImage({ prompt: 'a cat' })).rejects.toThrow('Request failed: Network error');
+    });
+
+    it('should not crash the error handler on a non-Error rejection', async () => {
+      (axios.post as Mock).mockRejectedValue('socket hang up');
+      await expect(api.generateImage({ prompt: 'a cat' })).rejects.toThrow('Request failed: socket hang up');
+      (axios.post as Mock).mockRejectedValue(null);
+      await expect(api.generateImage({ prompt: 'a cat' })).rejects.toThrow('Request failed: null');
     });
 
     it('should handle 500 errors', async () => {

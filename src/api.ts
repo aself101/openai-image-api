@@ -26,18 +26,25 @@
 import axios, { type AxiosResponse } from 'axios';
 import FormData from 'form-data';
 import { createReadStream } from 'fs';
-import type { Readable } from 'stream';
+import { Readable } from 'stream';
 import winston from 'winston';
 import {
   getOpenAIApiKey,
   BASE_URL,
   ENDPOINTS,
   DEFAULT_MODEL,
+  unknownModelMessage,
   validateModelParams,
   getModelConstraints,
   getModelDeprecation,
 } from './config.js';
-import { decodeBase64Image, parseSSEStream, readStreamToString } from './utils.js';
+import {
+  decodeBase64Image,
+  parseSSEStream,
+  readStreamToString,
+  validateImagePath,
+  getErrorMessage,
+} from './utils.js';
 import type {
   APIOptions,
   GenerateImageParams,
@@ -45,6 +52,7 @@ import type {
   StreamImageParams,
   StreamEditImageParams,
   StreamHandlers,
+  ImageModel,
   ImageResponse,
   ImageGenerationStreamEvent,
   ImageEditStreamEvent,
@@ -53,6 +61,26 @@ import type {
   ImageEditCompletedEvent,
   Logger,
 } from './types.js';
+
+// Re-export every public type so `import { OpenAIImageAPI, type ImageModel } from 'openai-image-api'`
+// works from the main entry; the `./types` subpath remains available.
+export type * from './types.js';
+
+/** Shape of a terminal error event the API may emit mid-stream */
+interface StreamErrorEvent {
+  type: 'error';
+  error?: { message?: string; code?: string };
+}
+
+/** Narrow parsed SSE JSON to an object carrying a string `type` discriminator */
+function isTypedEvent(value: unknown): value is { type: string } {
+  return typeof value === 'object' && value !== null && typeof (value as { type?: unknown }).type === 'string';
+}
+
+/** Narrow a typed event to the API's error-event shape */
+function isStreamErrorEvent(value: { type: string }): value is StreamErrorEvent {
+  return value.type === 'error';
+}
 
 /** Default per-request timeout; see APIOptions.requestTimeout for rationale */
 const DEFAULT_REQUEST_TIMEOUT = 180_000;
@@ -185,11 +213,9 @@ export class OpenAIImageAPI {
     }
 
     // In development, return detailed error messages
-    const axiosError = error as {
-      response?: { data?: { error?: { message?: string } } };
-      message?: string;
-    };
-    return axiosError.response?.data?.error?.message || axiosError.message || 'Unknown error';
+    const apiMessage = (error as { response?: { data?: { error?: { message?: string } } } } | null)?.response?.data
+      ?.error?.message;
+    return apiMessage || getErrorMessage(error) || 'Unknown error';
   }
 
   /**
@@ -199,9 +225,9 @@ export class OpenAIImageAPI {
    * @throws Error Always
    */
   private _throwApiError(error: unknown): never {
-    this.logger.error(`API request failed: ${(error as Error).message}`);
+    this.logger.error(`API request failed: ${getErrorMessage(error)}`);
 
-    const axiosError = error as { response?: { status: number } };
+    const axiosError = (error ?? {}) as { response?: { status: number } };
     if (axiosError.response) {
       const status = axiosError.response.status;
       const sanitizedMessage = this._sanitizeErrorMessage(error, status);
@@ -219,7 +245,7 @@ export class OpenAIImageAPI {
       }
     }
 
-    throw new Error(`Request failed: ${(error as Error).message}`);
+    throw new Error(`Request failed: ${getErrorMessage(error)}`);
   }
 
   /**
@@ -331,14 +357,12 @@ export class OpenAIImageAPI {
       stream = response.data;
     } catch (error) {
       // Recover the JSON error body from the stream so the message is useful
-      const axiosError = error as { response?: { status: number; data?: unknown } };
-      const body = axiosError.response?.data;
-      if (body && typeof (body as Readable).on === 'function') {
+      const response = (error as { response?: { status: number; data?: unknown } } | null)?.response;
+      if (response && response.data instanceof Readable) {
         try {
-          const text = await readStreamToString(body as Readable);
-          axiosError.response!.data = JSON.parse(text);
+          response.data = JSON.parse(await readStreamToString(response.data));
         } catch {
-          axiosError.response!.data = undefined;
+          response.data = undefined;
         }
       }
       this._throwApiError(error);
@@ -346,19 +370,25 @@ export class OpenAIImageAPI {
 
     for await (const raw of parseSSEStream(stream)) {
       if (!raw.data) continue;
-      let event: E;
+      let parsed: unknown;
       try {
-        event = JSON.parse(raw.data) as E;
+        parsed = JSON.parse(raw.data);
       } catch {
         this.logger.warn(`Skipping unparseable stream event (${raw.event ?? 'no event name'})`);
         continue;
       }
-      // The API may surface an error as a terminal event rather than a status
-      if ((event as unknown as { type?: string }).type === 'error') {
-        const err = event as unknown as { error?: { message?: string } };
-        throw new Error(`Stream error: ${err.error?.message ?? 'unknown error'}`);
+      if (!isTypedEvent(parsed)) {
+        this.logger.warn(`Skipping stream event without a type field (${raw.event ?? 'no event name'})`);
+        continue;
       }
-      yield event;
+      // The API may surface an error as a terminal event rather than a status
+      if (isStreamErrorEvent(parsed)) {
+        throw new Error(`Stream error: ${parsed.error?.message ?? 'unknown error'}`);
+      }
+      // `type` is the only field the discriminated union is narrowed on; the
+      // remaining fields are trusted as documented, the same trust the
+      // non-streaming path places in axios's parsed JSON body.
+      yield parsed as E;
     }
   }
 
@@ -444,7 +474,7 @@ export class OpenAIImageAPI {
   /**
    * Shared pre-flight for generation requests.
    */
-  private _prepareGenerate(params: StreamImageParams): string {
+  private _prepareGenerate(params: StreamImageParams): ImageModel {
     this._verifyApiKey();
     const model = params.model ?? DEFAULT_MODEL;
 
@@ -464,7 +494,7 @@ export class OpenAIImageAPI {
   /**
    * Shared pre-flight for edit requests.
    */
-  private _prepareEdit(params: StreamEditImageParams): string {
+  private async _prepareEdit(params: StreamEditImageParams): Promise<ImageModel> {
     this._verifyApiKey();
     const model = params.model ?? DEFAULT_MODEL;
 
@@ -477,7 +507,7 @@ export class OpenAIImageAPI {
 
     const constraints = getModelConstraints(model);
     if (!constraints) {
-      throw new Error(`Unknown model: ${model}`);
+      throw new Error(unknownModelMessage(model));
     }
     if (!constraints.supportsEdit) {
       throw new Error(`Model ${model} does not support image editing`);
@@ -491,6 +521,12 @@ export class OpenAIImageAPI {
     const validation = validateModelParams(model, params);
     if (!validation.valid) {
       throw new Error(`Parameter validation failed:\n  - ${validation.errors.join('\n  - ')}`);
+    }
+
+    // Fail fast on inputs the API would reject: missing files and non-image
+    // bytes, checked by magic number before any upload begins.
+    for (const file of params.mask ? [...images, params.mask] : images) {
+      await validateImagePath(file);
     }
 
     this._warnIfDeprecated(model);
@@ -525,7 +561,7 @@ export class OpenAIImageAPI {
    */
   async generateImage(params: GenerateImageParams): Promise<ImageResponse> {
     const model = this._prepareGenerate(params);
-    const payload = this._buildGeneratePayload({ ...params, model: model as GenerateImageParams['model'] });
+    const payload = this._buildGeneratePayload({ ...params, model });
 
     this.logger.info(`Generating image with ${model}: "${params.prompt.substring(0, 50)}..."`);
     this.logger.debug(`Request payload: ${JSON.stringify(payload)}`);
@@ -547,11 +583,7 @@ export class OpenAIImageAPI {
    */
   async *streamImage(params: StreamImageParams): AsyncGenerator<ImageGenerationStreamEvent> {
     const model = this._prepareGenerate(params);
-    const payload = this._buildGeneratePayload({
-      ...params,
-      model: model as GenerateImageParams['model'],
-      stream: true,
-    });
+    const payload = this._buildGeneratePayload({ ...params, model, stream: true });
 
     this.logger.info(`Streaming image with ${model}: "${params.prompt.substring(0, 50)}..."`);
     this.logger.debug(`Request payload: ${JSON.stringify(payload)}`);
@@ -592,8 +624,8 @@ export class OpenAIImageAPI {
    * @returns Edit response with base64 image data
    */
   async generateImageEdit(params: EditImageParams): Promise<ImageResponse> {
-    const model = this._prepareEdit(params);
-    const formData = this._buildEditForm({ ...params, model: model as EditImageParams['model'] });
+    const model = await this._prepareEdit(params);
+    const formData = this._buildEditForm({ ...params, model });
 
     this.logger.info(`Editing image(s) with ${model}: "${params.prompt.substring(0, 50)}..."`);
 
@@ -612,12 +644,8 @@ export class OpenAIImageAPI {
    * @param params - Edit parameters plus `partial_images`
    */
   async *streamImageEdit(params: StreamEditImageParams): AsyncGenerator<ImageEditStreamEvent> {
-    const model = this._prepareEdit(params);
-    const formData = this._buildEditForm({
-      ...params,
-      model: model as EditImageParams['model'],
-      stream: true,
-    });
+    const model = await this._prepareEdit(params);
+    const formData = this._buildEditForm({ ...params, model, stream: true });
 
     this.logger.info(`Streaming edit with ${model}: "${params.prompt.substring(0, 50)}..."`);
 
@@ -669,8 +697,7 @@ export class OpenAIImageAPI {
     const ext = format ?? response.output_format ?? 'png';
     const savedPaths: string[] = [];
 
-    for (let i = 0; i < response.data.length; i++) {
-      const imageData = response.data[i];
+    for (const [i, imageData] of response.data.entries()) {
       const filename =
         response.data.length > 1 ? `${baseFilename}_${i + 1}.${ext}` : `${baseFilename}.${ext}`;
       const filepath = `${outputDir}/${filename}`;

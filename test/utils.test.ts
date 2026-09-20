@@ -4,15 +4,10 @@
  * Tests for utils.ts - file I/O, image handling, SSE parsing, and helper functions.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
-
-// Mock DNS module before importing utils
-vi.mock('dns/promises', () => ({
-  lookup: vi.fn()
-}));
 
 import {
   ensureDirectory,
@@ -20,17 +15,15 @@ import {
   sanitizeForFilename,
   promptToFilename,
   generateTimestampedFilename,
-  validateImageFile,
   decodeBase64Image,
-  validateImageUrl,
   validateImagePath,
   validateOutputPath,
   parseSSEStream,
   readStreamToString,
+  getErrorMessage,
+  getErrorCode,
 } from '../src/utils.js';
 import { Readable } from 'stream';
-import { lookup } from 'dns/promises';
-import type { Mock } from 'vitest';
 import type { RawSSEEvent } from '../src/types.js';
 
 const TEST_DIR = './test-output';
@@ -196,55 +189,6 @@ describe('Utility Functions', () => {
     });
   });
 
-  describe('validateImageFile', () => {
-    it('should validate file exists', () => {
-      const filepath = path.join(TEST_DIR, 'test.png');
-      const result = validateImageFile(filepath);
-
-      expect(result.valid).toBe(false);
-      expect(result.errors[0]).toContain('not found');
-    });
-
-    it('should validate file size', async () => {
-      const filepath = path.join(TEST_DIR, 'test.png');
-      const largeData = Buffer.alloc(5 * 1024 * 1024); // 5MB
-      await writeToFile(largeData, filepath, 'binary');
-
-      const result = validateImageFile(filepath, {
-        maxSize: 4 * 1024 * 1024 // 4MB limit
-      });
-
-      expect(result.valid).toBe(false);
-      expect(result.errors[0]).toContain('exceeds maximum');
-    });
-
-    it('should validate file format', async () => {
-      const filepath = path.join(TEST_DIR, 'test.txt');
-      await writeToFile('test', filepath);
-
-      const result = validateImageFile(filepath, {
-        formats: ['png', 'jpg', 'webp']
-      });
-
-      expect(result.valid).toBe(false);
-      expect(result.errors[0]).toContain('not supported');
-    });
-
-    it('should pass validation for valid file', async () => {
-      const filepath = path.join(TEST_DIR, 'test.png');
-      const smallData = Buffer.alloc(1024); // 1KB
-      await writeToFile(smallData, filepath, 'binary');
-
-      const result = validateImageFile(filepath, {
-        maxSize: 10 * 1024 * 1024, // 10MB
-        formats: ['png', 'jpg']
-      });
-
-      expect(result.valid).toBe(true);
-      expect(result.errors).toHaveLength(0);
-    });
-  });
-
   describe('decodeBase64Image', () => {
     it('should decode base64 and save image', async () => {
       const filepath = path.join(TEST_DIR, 'decoded.png');
@@ -264,87 +208,6 @@ describe('Utility Functions', () => {
       await decodeBase64Image(testData, filepath);
 
       expect(existsSync(filepath)).toBe(true);
-    });
-  });
-
-  describe('Security: validateImageUrl', () => {
-    beforeEach(() => {
-      vi.clearAllMocks();
-    });
-
-    it('should accept valid HTTPS URLs with public IPs', async () => {
-      (lookup as Mock).mockResolvedValue({ address: '8.8.8.8', family: 4 });
-      await expect(validateImageUrl('https://example.com/image.png')).resolves.toBe('https://example.com/image.png');
-
-      (lookup as Mock).mockResolvedValue({ address: '1.1.1.1', family: 4 });
-      await expect(validateImageUrl('https://api.example.com/v1/images/123')).resolves.toBe('https://api.example.com/v1/images/123');
-    });
-
-    it('should reject HTTP URLs (only HTTPS allowed)', async () => {
-      await expect(validateImageUrl('http://example.com/image.png'))
-        .rejects.toThrow('Only HTTPS URLs are allowed');
-    });
-
-    it('should reject localhost URLs', async () => {
-      await expect(validateImageUrl('https://localhost/image.png'))
-        .rejects.toThrow(/metadata/i);
-
-      await expect(validateImageUrl('https://127.0.0.1/image.png'))
-        .rejects.toThrow(/internal|private/i);
-    });
-
-    it('should reject private IP ranges', async () => {
-      await expect(validateImageUrl('https://10.0.0.1/image.png'))
-        .rejects.toThrow(/internal|private/i);
-
-      await expect(validateImageUrl('https://192.168.1.1/image.png'))
-        .rejects.toThrow(/internal|private/i);
-    });
-
-    it('should reject invalid URLs', async () => {
-      await expect(validateImageUrl('not-a-url')).rejects.toThrow('Invalid URL');
-      await expect(validateImageUrl('ftp://example.com')).rejects.toThrow('HTTPS');
-    });
-
-    // DNS Rebinding Prevention Tests
-    it('should reject domains resolving to localhost (DNS rebinding prevention)', async () => {
-      (lookup as Mock).mockResolvedValue({ address: '127.0.0.1', family: 4 });
-      await expect(validateImageUrl('https://evil.com/image.jpg'))
-        .rejects.toThrow('resolves to internal/private IP');
-    });
-
-    it('should reject domains resolving to private IPs (DNS rebinding prevention)', async () => {
-      (lookup as Mock).mockResolvedValue({ address: '10.0.0.1', family: 4 });
-      await expect(validateImageUrl('https://evil.com/image.jpg'))
-        .rejects.toThrow('resolves to internal/private IP');
-    });
-
-    // IPv4-mapped IPv6 Bypass Prevention Tests
-    it('should reject IPv4-mapped IPv6 localhost addresses (SSRF bypass prevention)', async () => {
-      (lookup as Mock).mockResolvedValue({ address: '::ffff:127.0.0.1', family: 6 });
-      await expect(validateImageUrl('https://evil.com/image.jpg'))
-        .rejects.toThrow('resolves to internal/private IP');
-    });
-
-    it('should reject IPv4-mapped IPv6 private IP addresses (SSRF bypass prevention)', async () => {
-      const mappedPrivateIPs = [
-        '::ffff:10.0.0.1',      // Private Class A
-        '::ffff:192.168.1.1',   // Private Class C
-        '::ffff:172.16.0.1',    // Private Class B
-        '::ffff:169.254.169.254' // AWS metadata
-      ];
-
-      for (const ip of mappedPrivateIPs) {
-        (lookup as Mock).mockResolvedValue({ address: ip, family: 6 });
-        await expect(validateImageUrl('https://evil.com/image.jpg'))
-          .rejects.toThrow('resolves to internal/private IP');
-      }
-    });
-
-    it('should handle DNS lookup failures gracefully', async () => {
-      (lookup as Mock).mockRejectedValue({ code: 'ENOTFOUND' });
-      await expect(validateImageUrl('https://nonexistent.domain.invalid/image.jpg'))
-        .rejects.toThrow('could not be resolved');
     });
   });
 
@@ -392,6 +255,40 @@ describe('Utility Functions', () => {
 
       await expect(validateImagePath(testFile))
         .rejects.toThrow('does not appear to be a valid image');
+    });
+  });
+
+  describe('writeToFile binary guard', () => {
+    it('should refuse a binary write of a non-Buffer', async () => {
+      await expect(writeToFile('not a buffer', path.join(TEST_DIR, 'x.png'))).rejects.toThrow(
+        'requires a Buffer, got string'
+      );
+    });
+  });
+
+  describe('getErrorMessage / getErrorCode', () => {
+    it('should read Error messages', () => {
+      expect(getErrorMessage(new Error('boom'))).toBe('boom');
+    });
+
+    it('should pass strings through and stringify everything else', () => {
+      expect(getErrorMessage('plain')).toBe('plain');
+      expect(getErrorMessage({ a: 1 })).toBe('{"a":1}');
+      expect(getErrorMessage(null)).toBe('null');
+      expect(getErrorMessage(undefined)).toBe('undefined');
+    });
+
+    it('should survive values JSON.stringify rejects', () => {
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      expect(getErrorMessage(circular)).toBe('[object Object]');
+    });
+
+    it('should extract errno codes only when they are strings', () => {
+      expect(getErrorCode(Object.assign(new Error('x'), { code: 'ENOENT' }))).toBe('ENOENT');
+      expect(getErrorCode(Object.assign(new Error('x'), { code: 13 }))).toBeUndefined();
+      expect(getErrorCode('nope')).toBeUndefined();
+      expect(getErrorCode(null)).toBeUndefined();
     });
   });
 

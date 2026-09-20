@@ -242,6 +242,17 @@ describe('Configuration', () => {
       expect(validateFlexibleSize('3840x2176', rule).join()).toMatch(/total pixels|exceed/);
     });
 
+    it('should accept exactly the minimum pixel count and reject one grid step below', () => {
+      // 640x1024 = 655,360 px, the published floor; 624x1024 = 638,976 px
+      expect(validateFlexibleSize('640x1024', rule)).toEqual([]);
+      expect(validateFlexibleSize('624x1024', rule).join()).toMatch(/total pixels/);
+    });
+
+    it('should accept exactly the maximum pixel count', () => {
+      // 3840x2160 = 8,294,400 px, the published ceiling
+      expect(validateFlexibleSize('3840x2160', rule)).toEqual([]);
+    });
+
     it('should reject malformed strings', () => {
       expect(validateFlexibleSize('big', rule).join()).toMatch(/WIDTHxHEIGHT/);
       expect(validateFlexibleSize('1024x', rule).join()).toMatch(/WIDTHxHEIGHT/);
@@ -366,7 +377,8 @@ describe('Configuration', () => {
     it('should return error for unknown model', () => {
       const result = validateModelParams('dall-e-3', { prompt: 'x' });
       expect(result.valid).toBe(false);
-      expect(result.errors).toEqual(['Unknown model: dall-e-3']);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toMatch(/^Unknown model "dall-e-3"\. Supported: gpt-image-2\.5-sunburst, .*dated snapshots\)$/);
     });
 
     it('should validate snapshots with the family constraints', () => {

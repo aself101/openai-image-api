@@ -295,13 +295,6 @@ export interface ValidationResult {
     /** Array of error messages if validation failed */
     errors: string[];
 }
-/** Image file validation constraints */
-export interface ImageFileConstraints {
-    /** Maximum file size in bytes */
-    maxSize?: number;
-    /** Valid file formats (extensions without dot) */
-    formats?: string[];
-}
 /** CLI spinner interface */
 export interface Spinner {
     /** Start the spinner animation */
@@ -312,13 +305,6 @@ export interface Spinner {
     stop(finalMessage?: string): Spinner;
     /** Stop spinner with failure message */
     fail(errorMessage?: string): Spinner;
-}
-/** Request options for API calls */
-export interface RequestOptions {
-    /** Request timeout in milliseconds */
-    timeout?: number;
-    /** AbortSignal for cancellation */
-    signal?: AbortSignal;
 }
 export type { Logger };
 //# sourceMappingURL=types.d.ts.map

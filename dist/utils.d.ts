@@ -1,12 +1,19 @@
 /**
  * OpenAI Image Service Utility Functions
  *
- * Utility functions for OpenAI image generation, including file I/O,
- * image handling, SSRF-safe URL validation, SSE parsing, and data
- * transformations.
+ * Utility functions for OpenAI image generation: file I/O, input-image and
+ * output-path validation, SSE parsing, filename generation, and the CLI
+ * spinner.
+ *
+ * Removed in 3.0.0: `validateImageUrl`, `downloadImage`, `imageToBase64`,
+ * `validateImageFile`, `pause`. The first three existed to fetch DALL-E
+ * `url`-format responses; GPT Image models return base64 only, so the package
+ * no longer performs any outbound fetch other than the API call itself, and the
+ * SSRF guard that protected those fetches went with them. The last two had no
+ * caller in any released version.
  */
 import type { Readable } from 'stream';
-import type { Spinner, ImageFileConstraints, ValidationResult, Logger, RawSSEEvent } from './types.js';
+import type { Spinner, Logger, RawSSEEvent } from './types.js';
 declare const logger: Logger;
 /**
  * Set the logging level.
@@ -14,18 +21,22 @@ declare const logger: Logger;
  * @param level - Log level (DEBUG, INFO, WARNING, ERROR)
  */
 export declare function setLogLevel(level: string): void;
+/** Module-level logger shared by the CLI and utilities; level set via setLogLevel */
 export { logger };
 /**
- * Validate URL for security (prevent SSRF attacks).
+ * Extract a printable message from whatever was thrown.
  *
- * DNS Resolution: This function performs DNS resolution to prevent DNS rebinding attacks,
- * where a domain might resolve to different IPs between validation time and request time.
+ * `catch (error)` binds `unknown` under strict mode; casting it to `Error`
+ * crashes inside the error handler if a dependency throws a string or null.
  *
- * @param url - URL to validate
- * @returns The validated URL
- * @throws Error If URL is invalid or points to blocked resource
+ * @param error - The caught value
+ * @returns The Error's message, or the value stringified
  */
-export declare function validateImageUrl(url: string): Promise<string>;
+export declare function getErrorMessage(error: unknown): string;
+/**
+ * Extract a Node errno code from a caught value, if it carries one.
+ */
+export declare function getErrorCode(error: unknown): string | undefined;
 /**
  * Validate that file exists and is a valid image file.
  *
@@ -60,21 +71,6 @@ type FileFormat = 'json' | 'txt' | 'binary' | 'auto';
  */
 export declare function writeToFile(data: unknown, filepath: string, fileFormat?: FileFormat): Promise<void>;
 /**
- * Convert local image file or URL to base64 data URI.
- *
- * @param input - Local file path or URL
- * @returns Base64 data URI (data:image/png;base64,...)
- */
-export declare function imageToBase64(input: string): Promise<string>;
-/**
- * Download image from URL and save to file.
- *
- * @param url - Image URL
- * @param filepath - Destination file path
- * @returns The filepath where image was saved
- */
-export declare function downloadImage(url: string, filepath: string): Promise<string>;
-/**
  * Decode base64 image data and save to file.
  *
  * @param b64Data - Base64 encoded image data
@@ -107,20 +103,6 @@ export declare function promptToFilename(prompt: string, maxLength?: number): st
  * @returns Timestamped filename
  */
 export declare function generateTimestampedFilename(prompt: string, model: string, extension?: string): string;
-/**
- * Validate image file.
- *
- * @param filepath - Path to image file
- * @param constraints - Validation constraints
- * @returns Validation result with valid flag and errors array
- */
-export declare function validateImageFile(filepath: string, constraints?: ImageFileConstraints): ValidationResult;
-/**
- * Pause execution for specified time.
- *
- * @param seconds - Number of seconds to pause
- */
-export declare function pause(seconds: number): Promise<void>;
 /**
  * Create a simple text-based spinner for CLI.
  *

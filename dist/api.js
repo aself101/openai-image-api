@@ -25,9 +25,18 @@
 import axios from 'axios';
 import FormData from 'form-data';
 import { createReadStream } from 'fs';
+import { Readable } from 'stream';
 import winston from 'winston';
-import { getOpenAIApiKey, BASE_URL, ENDPOINTS, DEFAULT_MODEL, validateModelParams, getModelConstraints, getModelDeprecation, } from './config.js';
-import { decodeBase64Image, parseSSEStream, readStreamToString } from './utils.js';
+import { getOpenAIApiKey, BASE_URL, ENDPOINTS, DEFAULT_MODEL, unknownModelMessage, validateModelParams, getModelConstraints, getModelDeprecation, } from './config.js';
+import { decodeBase64Image, parseSSEStream, readStreamToString, validateImagePath, getErrorMessage, } from './utils.js';
+/** Narrow parsed SSE JSON to an object carrying a string `type` discriminator */
+function isTypedEvent(value) {
+    return typeof value === 'object' && value !== null && typeof value.type === 'string';
+}
+/** Narrow a typed event to the API's error-event shape */
+function isStreamErrorEvent(value) {
+    return value.type === 'error';
+}
 /** Default per-request timeout; see APIOptions.requestTimeout for rationale */
 const DEFAULT_REQUEST_TIMEOUT = 180_000;
 /**
@@ -135,8 +144,9 @@ export class OpenAIImageAPI {
             return genericMessages[status] || 'An error occurred';
         }
         // In development, return detailed error messages
-        const axiosError = error;
-        return axiosError.response?.data?.error?.message || axiosError.message || 'Unknown error';
+        const apiMessage = error?.response?.data
+            ?.error?.message;
+        return apiMessage || getErrorMessage(error) || 'Unknown error';
     }
     /**
      * Translate an axios failure into the package's error vocabulary.
@@ -145,8 +155,8 @@ export class OpenAIImageAPI {
      * @throws Error Always
      */
     _throwApiError(error) {
-        this.logger.error(`API request failed: ${error.message}`);
-        const axiosError = error;
+        this.logger.error(`API request failed: ${getErrorMessage(error)}`);
+        const axiosError = (error ?? {});
         if (axiosError.response) {
             const status = axiosError.response.status;
             const sanitizedMessage = this._sanitizeErrorMessage(error, status);
@@ -166,7 +176,7 @@ export class OpenAIImageAPI {
                 throw new Error(`API error (${status}): ${sanitizedMessage}`);
             }
         }
-        throw new Error(`Request failed: ${error.message}`);
+        throw new Error(`Request failed: ${getErrorMessage(error)}`);
     }
     /**
      * Enforce the minimum delay between requests, then stamp this one.
@@ -260,15 +270,13 @@ export class OpenAIImageAPI {
         }
         catch (error) {
             // Recover the JSON error body from the stream so the message is useful
-            const axiosError = error;
-            const body = axiosError.response?.data;
-            if (body && typeof body.on === 'function') {
+            const response = error?.response;
+            if (response && response.data instanceof Readable) {
                 try {
-                    const text = await readStreamToString(body);
-                    axiosError.response.data = JSON.parse(text);
+                    response.data = JSON.parse(await readStreamToString(response.data));
                 }
                 catch {
-                    axiosError.response.data = undefined;
+                    response.data = undefined;
                 }
             }
             this._throwApiError(error);
@@ -276,20 +284,26 @@ export class OpenAIImageAPI {
         for await (const raw of parseSSEStream(stream)) {
             if (!raw.data)
                 continue;
-            let event;
+            let parsed;
             try {
-                event = JSON.parse(raw.data);
+                parsed = JSON.parse(raw.data);
             }
             catch {
                 this.logger.warn(`Skipping unparseable stream event (${raw.event ?? 'no event name'})`);
                 continue;
             }
-            // The API may surface an error as a terminal event rather than a status
-            if (event.type === 'error') {
-                const err = event;
-                throw new Error(`Stream error: ${err.error?.message ?? 'unknown error'}`);
+            if (!isTypedEvent(parsed)) {
+                this.logger.warn(`Skipping stream event without a type field (${raw.event ?? 'no event name'})`);
+                continue;
             }
-            yield event;
+            // The API may surface an error as a terminal event rather than a status
+            if (isStreamErrorEvent(parsed)) {
+                throw new Error(`Stream error: ${parsed.error?.message ?? 'unknown error'}`);
+            }
+            // `type` is the only field the discriminated union is narrowed on; the
+            // remaining fields are trusted as documented, the same trust the
+            // non-streaming path places in axios's parsed JSON body.
+            yield parsed;
         }
     }
     /**
@@ -378,7 +392,7 @@ export class OpenAIImageAPI {
     /**
      * Shared pre-flight for edit requests.
      */
-    _prepareEdit(params) {
+    async _prepareEdit(params) {
         this._verifyApiKey();
         const model = params.model ?? DEFAULT_MODEL;
         if (!params.image || (Array.isArray(params.image) && params.image.length === 0)) {
@@ -389,7 +403,7 @@ export class OpenAIImageAPI {
         }
         const constraints = getModelConstraints(model);
         if (!constraints) {
-            throw new Error(`Unknown model: ${model}`);
+            throw new Error(unknownModelMessage(model));
         }
         if (!constraints.supportsEdit) {
             throw new Error(`Model ${model} does not support image editing`);
@@ -401,6 +415,11 @@ export class OpenAIImageAPI {
         const validation = validateModelParams(model, params);
         if (!validation.valid) {
             throw new Error(`Parameter validation failed:\n  - ${validation.errors.join('\n  - ')}`);
+        }
+        // Fail fast on inputs the API would reject: missing files and non-image
+        // bytes, checked by magic number before any upload begins.
+        for (const file of params.mask ? [...images, params.mask] : images) {
+            await validateImagePath(file);
         }
         this._warnIfDeprecated(model);
         return model;
@@ -431,7 +450,7 @@ export class OpenAIImageAPI {
      */
     async generateImage(params) {
         const model = this._prepareGenerate(params);
-        const payload = this._buildGeneratePayload({ ...params, model: model });
+        const payload = this._buildGeneratePayload({ ...params, model });
         this.logger.info(`Generating image with ${model}: "${params.prompt.substring(0, 50)}..."`);
         this.logger.debug(`Request payload: ${JSON.stringify(payload)}`);
         const response = await this._makeRequest('POST', ENDPOINTS.generate, payload, false);
@@ -449,11 +468,7 @@ export class OpenAIImageAPI {
      */
     async *streamImage(params) {
         const model = this._prepareGenerate(params);
-        const payload = this._buildGeneratePayload({
-            ...params,
-            model: model,
-            stream: true,
-        });
+        const payload = this._buildGeneratePayload({ ...params, model, stream: true });
         this.logger.info(`Streaming image with ${model}: "${params.prompt.substring(0, 50)}..."`);
         this.logger.debug(`Request payload: ${JSON.stringify(payload)}`);
         yield* this._makeStreamRequest(ENDPOINTS.generate, payload, false);
@@ -490,8 +505,8 @@ export class OpenAIImageAPI {
      * @returns Edit response with base64 image data
      */
     async generateImageEdit(params) {
-        const model = this._prepareEdit(params);
-        const formData = this._buildEditForm({ ...params, model: model });
+        const model = await this._prepareEdit(params);
+        const formData = this._buildEditForm({ ...params, model });
         this.logger.info(`Editing image(s) with ${model}: "${params.prompt.substring(0, 50)}..."`);
         const response = await this._makeRequest('POST', ENDPOINTS.edit, formData, true);
         this.logger.info(`Image edit complete. Generated ${response.data.length} image(s)`);
@@ -506,12 +521,8 @@ export class OpenAIImageAPI {
      * @param params - Edit parameters plus `partial_images`
      */
     async *streamImageEdit(params) {
-        const model = this._prepareEdit(params);
-        const formData = this._buildEditForm({
-            ...params,
-            model: model,
-            stream: true,
-        });
+        const model = await this._prepareEdit(params);
+        const formData = this._buildEditForm({ ...params, model, stream: true });
         this.logger.info(`Streaming edit with ${model}: "${params.prompt.substring(0, 50)}..."`);
         yield* this._makeStreamRequest(ENDPOINTS.edit, formData, true);
     }
@@ -553,8 +564,7 @@ export class OpenAIImageAPI {
     async saveImages(response, outputDir, baseFilename, format) {
         const ext = format ?? response.output_format ?? 'png';
         const savedPaths = [];
-        for (let i = 0; i < response.data.length; i++) {
-            const imageData = response.data[i];
+        for (const [i, imageData] of response.data.entries()) {
             const filename = response.data.length > 1 ? `${baseFilename}_${i + 1}.${ext}` : `${baseFilename}.${ext}`;
             const filepath = `${outputDir}/${filename}`;
             if (!imageData.b64_json) {

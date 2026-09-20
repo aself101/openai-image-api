@@ -21,8 +21,13 @@
  * comment says so; do not tighten a constraint the API does not publish.
  */
 import type { ImageModel, ImageModelFamily, ImageModelConstraints, ImageModelConstraintsMap, ModelDeprecation, ValidationResult, GenerateImageParams, EditImageParams, StreamParams, FlexibleSizeConstraint } from './types.js';
+/** OpenAI API base URL; override per instance via APIOptions.baseUrl (HTTPS only) */
 export declare const BASE_URL: string;
-export declare const ENDPOINTS: Record<string, string>;
+/** Image API endpoint paths, relative to BASE_URL */
+export declare const ENDPOINTS: {
+    readonly generate: "/v1/images/generations";
+    readonly edit: "/v1/images/edits";
+};
 /**
  * Default model when none is given.
  *
@@ -32,7 +37,14 @@ export declare const ENDPOINTS: Record<string, string>;
  */
 export declare const DEFAULT_MODEL: ImageModelFamily;
 /** CLI-friendly names to canonical model identifiers */
-export declare const MODELS: Record<string, ImageModelFamily>;
+export declare const MODELS: {
+    readonly sunburst: "gpt-image-2.5-sunburst";
+    readonly flare: "gpt-image-2.5-flare";
+    readonly 'gpt-image-2': "gpt-image-2";
+    readonly 'gpt-image-1.5': "gpt-image-1.5";
+    readonly 'gpt-image-1': "gpt-image-1";
+    readonly 'gpt-image-1-mini': "gpt-image-1-mini";
+};
 /** Dated snapshots resolved to the family whose constraints they share */
 export declare const MODEL_ALIASES: Record<string, ImageModelFamily>;
 /**
@@ -41,6 +53,11 @@ export declare const MODEL_ALIASES: Record<string, ImageModelFamily>;
  * warning the first time each is used.
  */
 export declare const MODEL_DEPRECATIONS: Partial<Record<ImageModelFamily, ModelDeprecation>>;
+/**
+ * Per-family parameter constraints, as published in the API reference.
+ * Look up by any accepted identifier through getModelConstraints(), which
+ * resolves dated snapshots to their family.
+ */
 export declare const MODEL_CONSTRAINTS: ImageModelConstraintsMap;
 /**
  * Retrieve OpenAI API key from environment variables or CLI flag.
@@ -63,6 +80,10 @@ export declare function validateApiKeyFormat(apiKey: string | null | undefined):
  * @returns Output directory path
  */
 export declare function getOutputDir(): string;
+/**
+ * The one unknown-model message, so the API class, validator and CLI agree.
+ */
+export declare function unknownModelMessage(model: string): string;
 /**
  * Resolve a model identifier (canonical or dated snapshot) to its family.
  *

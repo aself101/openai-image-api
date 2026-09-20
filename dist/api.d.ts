@@ -23,6 +23,7 @@
  * await api.saveImages(result, './out', 'cat');
  */
 import type { APIOptions, GenerateImageParams, EditImageParams, StreamImageParams, StreamEditImageParams, StreamHandlers, ImageResponse, ImageGenerationStreamEvent, ImageEditStreamEvent } from './types.js';
+export type * from './types.js';
 /**
  * Wrapper class for the OpenAI Image API.
  *

@@ -48,14 +48,14 @@ if (existsSync(globalConfigPath)) {
   dotenv.config({ path: globalConfigPath });
 }
 
-// OpenAI API Base URL
+/** OpenAI API base URL; override per instance via APIOptions.baseUrl (HTTPS only) */
 export const BASE_URL: string = 'https://api.openai.com';
 
-// API Endpoints
-export const ENDPOINTS: Record<string, string> = {
+/** Image API endpoint paths, relative to BASE_URL */
+export const ENDPOINTS = {
   generate: '/v1/images/generations',
   edit: '/v1/images/edits',
-};
+} as const satisfies Record<string, string>;
 
 /**
  * Default model when none is given.
@@ -67,14 +67,14 @@ export const ENDPOINTS: Record<string, string> = {
 export const DEFAULT_MODEL: ImageModelFamily = 'gpt-image-2.5-flare';
 
 /** CLI-friendly names to canonical model identifiers */
-export const MODELS: Record<string, ImageModelFamily> = {
+export const MODELS = {
   sunburst: 'gpt-image-2.5-sunburst',
   flare: 'gpt-image-2.5-flare',
   'gpt-image-2': 'gpt-image-2',
   'gpt-image-1.5': 'gpt-image-1.5',
   'gpt-image-1': 'gpt-image-1',
   'gpt-image-1-mini': 'gpt-image-1-mini',
-};
+} as const satisfies Record<string, ImageModelFamily>;
 
 /** Dated snapshots resolved to the family whose constraints they share */
 export const MODEL_ALIASES: Record<string, ImageModelFamily> = {
@@ -121,7 +121,11 @@ const GPT_IMAGE_BASE: Omit<ImageModelConstraints, 'sizes' | 'quality' | 'inputFi
   editMaxImages: 16,
 };
 
-// Model-specific parameter constraints
+/**
+ * Per-family parameter constraints, as published in the API reference.
+ * Look up by any accepted identifier through getModelConstraints(), which
+ * resolves dated snapshots to their family.
+ */
 export const MODEL_CONSTRAINTS: ImageModelConstraintsMap = {
   'gpt-image-2.5-sunburst': {
     ...GPT_IMAGE_BASE,
@@ -230,6 +234,13 @@ export function getOutputDir(): string {
 }
 
 /**
+ * The one unknown-model message, so the API class, validator and CLI agree.
+ */
+export function unknownModelMessage(model: string): string {
+  return `Unknown model "${model}". Supported: ${Object.values(MODELS).join(', ')} (and dated snapshots)`;
+}
+
+/**
  * Resolve a model identifier (canonical or dated snapshot) to its family.
  *
  * @param model - Model identifier as the caller supplied it
@@ -275,12 +286,13 @@ export function getModelDeprecation(model: string): ModelDeprecation | null {
  */
 export function validateFlexibleSize(size: string, rule: FlexibleSizeConstraint): string[] {
   const match = /^(\d+)x(\d+)$/.exec(size);
-  if (!match) {
+  const [, widthText, heightText] = match ?? [];
+  if (!match || widthText === undefined || heightText === undefined) {
     return [`Size "${size}" must be "auto" or WIDTHxHEIGHT (e.g. 1536x864)`];
   }
 
-  const width = parseInt(match[1], 10);
-  const height = parseInt(match[2], 10);
+  const width = parseInt(widthText, 10);
+  const height = parseInt(heightText, 10);
   const errors: string[] = [];
 
   if (width % rule.multipleOf !== 0 || height % rule.multipleOf !== 0) {
@@ -327,7 +339,7 @@ export function validateModelParams(
   const constraints = getModelConstraints(model);
 
   if (!constraints) {
-    errors.push(`Unknown model: ${model}`);
+    errors.push(unknownModelMessage(model));
     return { valid: false, errors };
   }
 

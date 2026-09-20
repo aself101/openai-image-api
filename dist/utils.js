@@ -1,17 +1,20 @@
 /**
  * OpenAI Image Service Utility Functions
  *
- * Utility functions for OpenAI image generation, including file I/O,
- * image handling, SSRF-safe URL validation, SSE parsing, and data
- * transformations.
+ * Utility functions for OpenAI image generation: file I/O, input-image and
+ * output-path validation, SSE parsing, filename generation, and the CLI
+ * spinner.
+ *
+ * Removed in 3.0.0: `validateImageUrl`, `downloadImage`, `imageToBase64`,
+ * `validateImageFile`, `pause`. The first three existed to fetch DALL-E
+ * `url`-format responses; GPT Image models return base64 only, so the package
+ * no longer performs any outbound fetch other than the API call itself, and the
+ * SSRF guard that protected those fetches went with them. The last two had no
+ * caller in any released version.
  */
 import fs from 'fs/promises';
-import { statSync } from 'fs';
 import path from 'path';
 import winston from 'winston';
-import axios from 'axios';
-import { lookup } from 'dns/promises';
-import { isIPv4, isIPv6 } from 'net';
 // Configure module logger
 const logger = winston.createLogger({
     level: 'info',
@@ -28,112 +31,38 @@ const logger = winston.createLogger({
 export function setLogLevel(level) {
     logger.level = level.toLowerCase();
 }
+/** Module-level logger shared by the CLI and utilities; level set via setLogLevel */
 export { logger };
 /**
- * Helper function to check if an IP address is blocked (private/internal).
+ * Extract a printable message from whatever was thrown.
  *
- * @param ip - IP address to check (IPv4 or IPv6)
- * @returns True if IP is blocked, false otherwise
+ * `catch (error)` binds `unknown` under strict mode; casting it to `Error`
+ * crashes inside the error handler if a dependency throws a string or null.
+ *
+ * @param error - The caught value
+ * @returns The Error's message, or the value stringified
  */
-function isBlockedIP(ip) {
-    // Remove IPv6 bracket notation
-    const cleanIP = ip.replace(/^\[|\]$/g, '');
-    // Block IPv4-mapped IPv6 addresses (::ffff:x.x.x.x format)
-    // This prevents SSRF bypass using addresses like ::ffff:127.0.0.1
-    if (cleanIP.toLowerCase().startsWith('::ffff:')) {
-        const mappedIPv4 = cleanIP.substring(7); // Extract the IPv4 part
-        return isBlockedIP(mappedIPv4); // Recursively check the mapped IPv4 address
-    }
-    // Block localhost variations
-    if (cleanIP === 'localhost' || cleanIP === '127.0.0.1' || cleanIP === '::1') {
-        return true;
-    }
-    // Block cloud metadata endpoints
-    const blockedHosts = ['metadata.google.internal', 'metadata', '169.254.169.254'];
-    if (blockedHosts.includes(cleanIP)) {
-        return true;
-    }
-    // Block private IP ranges and special addresses
-    const blockedPatterns = [
-        /^127\./, // Loopback
-        /^10\./, // Private Class A
-        /^172\.(1[6-9]|2[0-9]|3[0-1])\./, // Private Class B
-        /^192\.168\./, // Private Class C
-        /^169\.254\./, // Link-local (AWS metadata)
-        /^0\./, // Invalid range
-        /^::1$/, // IPv6 loopback
-        /^fe80:/, // IPv6 link-local
-        /^fc00:/, // IPv6 unique local
-        /^fd00:/, // IPv6 unique local
-    ];
-    return blockedPatterns.some((pattern) => pattern.test(cleanIP));
-}
-/**
- * Validate URL for security (prevent SSRF attacks).
- *
- * DNS Resolution: This function performs DNS resolution to prevent DNS rebinding attacks,
- * where a domain might resolve to different IPs between validation time and request time.
- *
- * @param url - URL to validate
- * @returns The validated URL
- * @throws Error If URL is invalid or points to blocked resource
- */
-export async function validateImageUrl(url) {
-    let parsed;
+export function getErrorMessage(error) {
+    if (error instanceof Error)
+        return error.message;
+    if (typeof error === 'string')
+        return error;
     try {
-        parsed = new URL(url);
+        return JSON.stringify(error) ?? String(error);
     }
     catch {
-        throw new Error(`Invalid URL: ${url}`);
+        return String(error);
     }
-    // Only allow HTTPS (not HTTP)
-    if (parsed.protocol !== 'https:') {
-        throw new Error('Only HTTPS URLs are allowed for security reasons');
+}
+/**
+ * Extract a Node errno code from a caught value, if it carries one.
+ */
+export function getErrorCode(error) {
+    if (error && typeof error === 'object' && 'code' in error) {
+        const code = error.code;
+        return typeof code === 'string' ? code : undefined;
     }
-    const hostname = parsed.hostname.toLowerCase();
-    const cleanHostname = hostname.replace(/^\[|\]$/g, ''); // Remove IPv6 brackets
-    // First check if hostname itself is blocked (before DNS resolution)
-    const blockedHosts = ['localhost', 'metadata.google.internal', 'metadata'];
-    if (blockedHosts.includes(cleanHostname)) {
-        logger.warn(`SECURITY: Blocked access to prohibited hostname: ${hostname}`);
-        throw new Error('Access to cloud metadata endpoints is not allowed');
-    }
-    // Check if hostname is already an IP address (not a domain name)
-    if (isIPv4(cleanHostname) || isIPv6(cleanHostname)) {
-        if (isBlockedIP(cleanHostname)) {
-            logger.warn(`SECURITY: Blocked access to private/internal IP: ${hostname}`);
-            throw new Error('Access to internal/private IP addresses is not allowed');
-        }
-    }
-    else {
-        // Hostname is a domain name - perform DNS resolution to prevent DNS rebinding
-        try {
-            logger.debug(`Resolving DNS for hostname: ${hostname}`);
-            const { address } = await lookup(hostname);
-            logger.debug(`DNS resolved ${hostname} → ${address}`);
-            if (isBlockedIP(address)) {
-                logger.warn(`SECURITY: DNS resolution of ${hostname} points to blocked IP: ${address}`);
-                throw new Error(`Domain ${hostname} resolves to internal/private IP address`);
-            }
-            logger.debug(`DNS validation passed for ${hostname} (resolved to ${address})`);
-        }
-        catch (error) {
-            const err = error;
-            if (err.code === 'ENOTFOUND') {
-                logger.warn(`SECURITY: Domain ${hostname} could not be resolved`);
-                throw new Error(`Domain ${hostname} could not be resolved`);
-            }
-            else if (err.message && err.message.includes('resolves to internal')) {
-                // Re-throw our custom error about blocked IPs
-                throw error;
-            }
-            else {
-                logger.warn(`SECURITY: DNS lookup failed for ${hostname}: ${err.message}`);
-                throw new Error(`Failed to validate domain ${hostname}: ${err.message}`);
-            }
-        }
-    }
-    return url;
+    return undefined;
 }
 /**
  * Validate that file exists and is a valid image file.
@@ -164,11 +93,11 @@ export async function validateImagePath(filepath) {
         return filepath;
     }
     catch (error) {
-        const err = error;
-        if (err.code === 'ENOENT') {
+        const code = getErrorCode(error);
+        if (code === 'ENOENT') {
             throw new Error(`Image file not found: ${filepath}`);
         }
-        else if (err.code === 'EACCES') {
+        else if (code === 'EACCES') {
             throw new Error(`Permission denied reading image file: ${filepath}`);
         }
         throw error;
@@ -208,8 +137,8 @@ export async function ensureDirectory(dirPath) {
         await fs.mkdir(dirPath, { recursive: true });
     }
     catch (error) {
-        const err = error;
-        logger.error(`Error creating directory ${dirPath}: ${err.message}`);
+        const message = getErrorMessage(error);
+        logger.error(`Error creating directory ${dirPath}: ${message}`);
         throw error;
     }
 }
@@ -247,6 +176,9 @@ export async function writeToFile(data, filepath, fileFormat = 'auto') {
             await fs.writeFile(filepath, JSON.stringify(data, null, 2));
         }
         else if (format === 'binary') {
+            if (!Buffer.isBuffer(data)) {
+                throw new Error(`Binary write to ${filepath} requires a Buffer, got ${typeof data}`);
+            }
             await fs.writeFile(filepath, data);
         }
         else {
@@ -255,95 +187,9 @@ export async function writeToFile(data, filepath, fileFormat = 'auto') {
         logger.debug(`Wrote file: ${filepath}`);
     }
     catch (error) {
-        const err = error;
-        logger.error(`Error writing file ${filepath}: ${err.message}`);
+        const message = getErrorMessage(error);
+        logger.error(`Error writing file ${filepath}: ${message}`);
         throw error;
-    }
-}
-/**
- * Convert local image file or URL to base64 data URI.
- *
- * @param input - Local file path or URL
- * @returns Base64 data URI (data:image/png;base64,...)
- */
-export async function imageToBase64(input) {
-    try {
-        let buffer;
-        let mimeType = 'image/png';
-        // Check if input is a URL
-        if (input.startsWith('http://') || input.startsWith('https://')) {
-            // Validate URL for security
-            await validateImageUrl(input);
-            logger.debug(`Fetching image from URL: ${input}`);
-            const response = await axios.get(input, {
-                responseType: 'arraybuffer',
-                timeout: 60000, // 60 second timeout
-                maxContentLength: 50 * 1024 * 1024, // 50MB limit
-                maxBodyLength: 50 * 1024 * 1024,
-                maxRedirects: 5, // Prevent redirect loops
-            });
-            buffer = Buffer.from(response.data);
-            // Try to detect MIME type from response
-            const contentType = response.headers['content-type'];
-            if (contentType) {
-                mimeType = contentType;
-            }
-        }
-        else {
-            // Local file - validate it's a real image
-            await validateImagePath(input);
-            logger.debug(`Reading local image: ${input}`);
-            buffer = await fs.readFile(input);
-            // Detect MIME type from extension
-            const ext = path.extname(input).toLowerCase();
-            const mimeTypes = {
-                '.png': 'image/png',
-                '.jpg': 'image/jpeg',
-                '.jpeg': 'image/jpeg',
-                '.webp': 'image/webp',
-                '.gif': 'image/gif',
-            };
-            mimeType = mimeTypes[ext] || 'image/png';
-        }
-        const base64 = buffer.toString('base64');
-        return `data:${mimeType};base64,${base64}`;
-    }
-    catch (error) {
-        const err = error;
-        logger.error(`Error converting image to base64: ${err.message}`);
-        throw new Error(`Failed to convert image to base64: ${err.message}`);
-    }
-}
-/**
- * Download image from URL and save to file.
- *
- * @param url - Image URL
- * @param filepath - Destination file path
- * @returns The filepath where image was saved
- */
-export async function downloadImage(url, filepath) {
-    try {
-        // Validate URL for security
-        await validateImageUrl(url);
-        logger.debug(`Downloading image from ${url} to ${filepath}`);
-        const dir = path.dirname(filepath);
-        await ensureDirectory(dir);
-        const response = await axios.get(url, {
-            responseType: 'arraybuffer',
-            timeout: 60000, // 60 second timeout
-            maxContentLength: 50 * 1024 * 1024, // 50MB limit
-            maxBodyLength: 50 * 1024 * 1024,
-            maxRedirects: 5, // Prevent redirect loops
-        });
-        const buffer = Buffer.from(response.data);
-        await fs.writeFile(filepath, buffer);
-        logger.info(`Downloaded image: ${filepath}`);
-        return filepath;
-    }
-    catch (error) {
-        const err = error;
-        logger.error(`Error downloading image: ${err.message}`);
-        throw new Error(`Failed to download image: ${err.message}`);
     }
 }
 /**
@@ -364,9 +210,9 @@ export async function decodeBase64Image(b64Data, filepath) {
         return filepath;
     }
     catch (error) {
-        const err = error;
-        logger.error(`Error decoding base64 image: ${err.message}`);
-        throw new Error(`Failed to decode base64 image: ${err.message}`);
+        const message = getErrorMessage(error);
+        logger.error(`Error decoding base64 image: ${message}`);
+        throw new Error(`Failed to decode base64 image: ${message}`);
     }
 }
 /**
@@ -402,60 +248,11 @@ export function promptToFilename(prompt, maxLength = 50) {
  * @returns Timestamped filename
  */
 export function generateTimestampedFilename(prompt, model, extension = 'png') {
-    const now = new Date();
-    const datePart = now.toISOString().replace(/[:.]/g, '-').split('T')[0];
-    const timePart = now.toISOString().replace(/[:.]/g, '-').split('T')[1].substring(0, 8);
-    const timestamp = `${datePart}_${timePart}`;
+    // ISO 8601 is always "YYYY-MM-DDTHH:MM:SS.mmmZ"; keep the date and HH-MM-SS
+    const iso = new Date().toISOString().replace(/[:.]/g, '-');
+    const timestamp = `${iso.slice(0, 10)}_${iso.slice(11, 19)}`;
     const promptPart = promptToFilename(prompt, 40);
     return `${timestamp}_${model}_${promptPart}.${extension}`;
-}
-/**
- * Validate image file.
- *
- * @param filepath - Path to image file
- * @param constraints - Validation constraints
- * @returns Validation result with valid flag and errors array
- */
-export function validateImageFile(filepath, constraints = {}) {
-    const errors = [];
-    try {
-        // Check if file exists
-        const stats = statSync(filepath);
-        // Check file size
-        if (constraints.maxSize && stats.size > constraints.maxSize) {
-            const maxMB = (constraints.maxSize / (1024 * 1024)).toFixed(1);
-            const actualMB = (stats.size / (1024 * 1024)).toFixed(1);
-            errors.push(`Image file size (${actualMB}MB) exceeds maximum (${maxMB}MB)`);
-        }
-        // Check file extension
-        const ext = path.extname(filepath).toLowerCase().substring(1);
-        if (constraints.formats && !constraints.formats.includes(ext)) {
-            errors.push(`Image format "${ext}" not supported. Valid formats: ${constraints.formats.join(', ')}`);
-        }
-        // Note: We don't check dimensions here as that would require image processing library
-        // The API will validate dimensions if required
-    }
-    catch (error) {
-        const err = error;
-        if (err.code === 'ENOENT') {
-            errors.push(`Image file not found: ${filepath}`);
-        }
-        else {
-            errors.push(`Error validating image file: ${err.message}`);
-        }
-    }
-    return {
-        valid: errors.length === 0,
-        errors,
-    };
-}
-/**
- * Pause execution for specified time.
- *
- * @param seconds - Number of seconds to pause
- */
-export async function pause(seconds) {
-    return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 }
 /**
  * Create a simple text-based spinner for CLI.
@@ -563,7 +360,7 @@ export async function* parseSSEStream(stream) {
         // Events end at a blank line; tolerate CRLF as well as LF
         let boundary;
         while ((boundary = buffer.search(/\r?\n\r?\n/)) !== -1) {
-            const delimiterLength = buffer[boundary] === '\r' ? 4 : 2;
+            const delimiterLength = buffer.startsWith('\r', boundary) ? 4 : 2;
             const block = buffer.slice(0, boundary);
             buffer = buffer.slice(boundary + delimiterLength);
             const parsed = flush(block);

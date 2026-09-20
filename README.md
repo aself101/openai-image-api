@@ -1,9 +1,9 @@
-# OpenAI Image Generation Service
+# OpenAI Image Generation & Editing Service
 
 [![npm version](https://img.shields.io/npm/v/openai-image-api.svg)](https://www.npmjs.com/package/openai-image-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/openai-image-api)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-160%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-174%20passing-brightgreen)](test/)
 
 A Node.js wrapper for the [OpenAI Image API](https://developers.openai.com/api/reference/resources/images) — `/v1/images/generations` and `/v1/images/edits` — for the GPT Image model family: **GPT Image 2.5** (Sunburst, Flare), **GPT Image 2**, and the deprecated GPT Image 1.x models. Generate and edit images, with streaming partial-image delivery, via CLI or programmatic API.
 
@@ -190,6 +190,8 @@ This package is written in TypeScript and includes full type definitions. All ty
 
 ### Importing Types
 
+Every type is re-exported from the main entry; `openai-image-api/types` also works.
+
 ```typescript
 import {
   OpenAIImageAPI,
@@ -207,14 +209,35 @@ import {
 
 // Constraints and helpers
 import {
-  MODEL_CONSTRAINTS,
-  MODEL_DEPRECATIONS,
-  DEFAULT_MODEL,
-  validateModelParams,
-  validateFlexibleSize,
+  MODEL_CONSTRAINTS,        // per-family sizes/quality/limits
+  MODEL_DEPRECATIONS,       // shutdown dates for the 1.x models
+  MODEL_ALIASES,            // dated snapshot → family
+  MODELS,                   // CLI short names → model ids
+  DEFAULT_MODEL,            // 'gpt-image-2.5-flare'
+  validateModelParams,      // the pre-flight validator the API class runs
+  validateFlexibleSize,     // WIDTHxHEIGHT rules for gpt-image-2 / 2.5
   getModelConstraints,
+  getModelDeprecation,
+  resolveModelFamily,
+  isSupportedModel,
+  getOpenAIApiKey,          // CLI flag → env resolution used by the constructor
+  validateApiKeyFormat,     // shape check only; does not call the API
+  getOutputDir,             // OPENAI_OUTPUT_DIR or 'datasets/openai'
 } from 'openai-image-api/config';
+
+// File and stream helpers used by the CLI, exported for reuse
+import {
+  decodeBase64Image,        // write a b64 payload to disk (creates directories)
+  validateImagePath,        // magic-byte check: PNG/JPEG/WebP/GIF
+  validateOutputPath,       // reject '..' traversal, optionally pin to a base dir
+  generateTimestampedFilename,
+  sanitizeForFilename,
+  parseSSEStream,           // raw SSE → { event, data } async generator
+  getErrorMessage,          // message from an `unknown` catch value
+} from 'openai-image-api/utils';
 ```
+
+`ensureDirectory`, `writeToFile`, `readStreamToString`, `promptToFilename`, `createSpinner`, `setLogLevel`, `logger`, and `getErrorCode` are also exported from `./utils` — small internals the CLI uses; they carry JSDoc but no compatibility promise beyond the current major.
 
 ### Project Structure
 
@@ -347,7 +370,7 @@ const result = await api.generateImageEdit({
 });
 ```
 
-Images are sent as multipart `image[]` parts; the mask as `mask`.
+Images are sent as multipart `image[]` parts; the mask as `mask`. Every input file is checked for existence and image magic bytes (PNG/JPEG/WebP/GIF) before the upload starts.
 
 ### `streamImage(params): AsyncGenerator<ImageGenerationStreamEvent>`
 
@@ -370,6 +393,11 @@ Decodes each `b64_json` entry to `<outputDir>/<baseFilename>.<format>` (numbered
 Streaming uses `stream: true` on the same endpoints; the API answers with Server-Sent Events. This package parses them and exposes both an async generator and a callback wrapper.
 
 ```typescript
+import fs from 'fs';
+import { OpenAIImageAPI } from 'openai-image-api';
+
+const api = new OpenAIImageAPI();
+
 for await (const event of api.streamImage({ prompt: 'a storm', partial_images: 3 })) {
   if (event.type === 'image_generation.partial_image') {
     fs.writeFileSync(`partial-${event.partial_image_index}.png`, Buffer.from(event.b64_json, 'base64'));
@@ -429,6 +457,7 @@ openai-img --prompt "a red apple" --prompt "a green pear" --prompt "a yellow ban
 ### Example 7: Programmatic edit with streaming
 
 ```typescript
+import fs from 'fs';
 import { OpenAIImageAPI } from 'openai-image-api';
 
 const api = new OpenAIImageAPI({ logLevel: 'WARNING' });
@@ -513,11 +542,12 @@ npm run test:ui
 npm run test:coverage
 ```
 
-The suite has 160 tests across three files:
+The suite has 174 tests across four files:
 
 - **config** — model catalogue and deprecation table, flexible-size rules (multiples of 16, aspect ratio, pixel bounds), per-model quality gating, `input_fidelity` rejection, cross-field rules (transparent+jpeg, compression without jpeg/webp), snapshot resolution.
 - **api** — request payloads per model family, default model, deprecation warning once per model, streaming (SSE reassembly across chunk boundaries, event ordering, callback wrapper, error-body recovery from a failed stream, terminal error events), edit pre-flight, `saveImages`, security (HTTPS enforcement, key redaction, production error sanitisation, rate limiting).
-- **utils** — file I/O, filename generation, SSRF-safe URL validation with DNS rebinding and IPv4-mapped-IPv6 checks, image magic-byte validation, path traversal, SSE parser edge cases (CRLF, multi-line data, comments, trailing event, 200 kB payloads).
+- **utils** — file I/O, filename generation, image magic-byte validation, path traversal, error-message extraction, SSE parser edge cases (CRLF, multi-line data, comments, trailing event, 200 kB payloads).
+- **cli** — subprocess smoke tests against the built `dist/cli.js`: `--dry-run` validation failures exit non-zero with the validator's message, `--model` rejects removed ids, invalid enum flags are refused before any request.
 
 Network calls are mocked. Live verification of streaming, editing, and the `input_fidelity` behaviour was performed against the real API on 2026-09-20 during the 3.0.0 work; it is not part of `npm test`.
 
@@ -530,6 +560,8 @@ Network calls are mocked. Live verification of streaming, editing, and the `inpu
 | `Rate limit exceeded. Please try again later.` | 429 |
 | `OpenAI service error. Please try again later.` | 500 / 502 / 503 |
 | `Parameter validation failed:\n  - ...` | Rejected client-side before any request; lists every failing rule |
+| `Image file not found: <path>` / `File does not appear to be a valid image` | Edit input failed the pre-upload check |
+| `Unknown model "<id>". Supported: ...` | Model id not in the catalogue (DALL-E ids land here) |
 | `Stream error: <message>` | The API sent a terminal `error` event mid-stream |
 | `Stream ended without an image_generation.completed event` | Connection closed early |
 
@@ -579,7 +611,8 @@ Other behaviour changes:
 - **`--dry-run` validates.** Previously it printed parameters and declared them valid without checking.
 - **`saveImages` `format` is optional** and defaults to the response's `output_format`.
 - **Output directories** are named by the full model id (`datasets/openai/gpt-image-2.5-flare/`), not a shortened alias.
-- New client-side rules: `background: transparent` with `output_format: jpeg` and `output_compression` without jpeg/webp are rejected before the request.
+- New client-side rules: `background: transparent` with `output_format: jpeg` and `output_compression` without jpeg/webp are rejected before the request; edit inputs are magic-byte checked before upload.
+- Removed utilities: `validateImageUrl`, `downloadImage`, `imageToBase64`, `validateImageFile`, `pause` (`openai-image-api/utils`). The first three served DALL-E URL responses; the package no longer fetches anything but the API itself. `RequestOptions` and `ImageFileConstraints` types are gone with them.
 
 ## Additional Resources
 

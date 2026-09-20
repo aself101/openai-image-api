@@ -373,14 +373,6 @@ export interface ValidationResult {
   errors: string[];
 }
 
-/** Image file validation constraints */
-export interface ImageFileConstraints {
-  /** Maximum file size in bytes */
-  maxSize?: number;
-  /** Valid file formats (extensions without dot) */
-  formats?: string[];
-}
-
 // =============================================================================
 // Utility Types
 // =============================================================================
@@ -395,14 +387,6 @@ export interface Spinner {
   stop(finalMessage?: string): Spinner;
   /** Stop spinner with failure message */
   fail(errorMessage?: string): Spinner;
-}
-
-/** Request options for API calls */
-export interface RequestOptions {
-  /** Request timeout in milliseconds */
-  timeout?: number;
-  /** AbortSignal for cancellation */
-  signal?: AbortSignal;
 }
 
 // =============================================================================

@@ -32,9 +32,9 @@ const globalConfigPath = join(homedir(), '.openai', '.env');
 if (existsSync(globalConfigPath)) {
     dotenv.config({ path: globalConfigPath });
 }
-// OpenAI API Base URL
+/** OpenAI API base URL; override per instance via APIOptions.baseUrl (HTTPS only) */
 export const BASE_URL = 'https://api.openai.com';
-// API Endpoints
+/** Image API endpoint paths, relative to BASE_URL */
 export const ENDPOINTS = {
     generate: '/v1/images/generations',
     edit: '/v1/images/edits',
@@ -96,7 +96,11 @@ const GPT_IMAGE_BASE = {
     imageFormats: ['png', 'webp', 'jpg', 'jpeg'],
     editMaxImages: 16,
 };
-// Model-specific parameter constraints
+/**
+ * Per-family parameter constraints, as published in the API reference.
+ * Look up by any accepted identifier through getModelConstraints(), which
+ * resolves dated snapshots to their family.
+ */
 export const MODEL_CONSTRAINTS = {
     'gpt-image-2.5-sunburst': {
         ...GPT_IMAGE_BASE,
@@ -196,6 +200,12 @@ export function getOutputDir() {
     return process.env.OPENAI_OUTPUT_DIR || 'datasets/openai';
 }
 /**
+ * The one unknown-model message, so the API class, validator and CLI agree.
+ */
+export function unknownModelMessage(model) {
+    return `Unknown model "${model}". Supported: ${Object.values(MODELS).join(', ')} (and dated snapshots)`;
+}
+/**
  * Resolve a model identifier (canonical or dated snapshot) to its family.
  *
  * @param model - Model identifier as the caller supplied it
@@ -237,11 +247,12 @@ export function getModelDeprecation(model) {
  */
 export function validateFlexibleSize(size, rule) {
     const match = /^(\d+)x(\d+)$/.exec(size);
-    if (!match) {
+    const [, widthText, heightText] = match ?? [];
+    if (!match || widthText === undefined || heightText === undefined) {
         return [`Size "${size}" must be "auto" or WIDTHxHEIGHT (e.g. 1536x864)`];
     }
-    const width = parseInt(match[1], 10);
-    const height = parseInt(match[2], 10);
+    const width = parseInt(widthText, 10);
+    const height = parseInt(heightText, 10);
     const errors = [];
     if (width % rule.multipleOf !== 0 || height % rule.multipleOf !== 0) {
         errors.push(`Size "${size}": width and height must both be multiples of ${rule.multipleOf}`);
@@ -275,7 +286,7 @@ export function validateModelParams(model, params) {
     const errors = [];
     const constraints = getModelConstraints(model);
     if (!constraints) {
-        errors.push(`Unknown model: ${model}`);
+        errors.push(unknownModelMessage(model));
         return { valid: false, errors };
     }
     // Validate prompt length

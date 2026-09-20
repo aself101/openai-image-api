@@ -19,14 +19,94 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
 import { OpenAIImageAPI } from './api.js';
-import { generateTimestampedFilename, writeToFile, ensureDirectory, setLogLevel, createSpinner, logger, decodeBase64Image, validateOutputPath, } from './utils.js';
-import { getOutputDir, getModelConstraints, getModelDeprecation, isSupportedModel, validateModelParams, MODELS, DEFAULT_MODEL, } from './config.js';
+import { generateTimestampedFilename, writeToFile, ensureDirectory, setLogLevel, createSpinner, logger, decodeBase64Image, validateOutputPath, getErrorMessage, } from './utils.js';
+import { getOutputDir, getModelConstraints, getModelDeprecation, isSupportedModel, validateModelParams, unknownModelMessage, MODELS, DEFAULT_MODEL, } from './config.js';
 // ES module dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageJsonPath = path.join(__dirname, '..', 'package.json');
 const { version } = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
 const program = new Command();
+const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR'];
+const QUALITIES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'];
+const BACKGROUNDS = ['auto', 'transparent', 'opaque'];
+const MODERATIONS = ['auto', 'low'];
+const OUTPUT_FORMATS = ['png', 'jpeg', 'webp'];
+const INPUT_FIDELITIES = ['high', 'low'];
+/**
+ * Narrow a raw flag value to one of an allowed set, or fail with the set.
+ *
+ * Commander hands back untyped strings; casting them to the literal unions the
+ * API expects would let `--quality bogus` type-check. Membership is checked
+ * here so the value is genuinely narrowed. Per-model rules (e.g. `max` only on
+ * 2.5) are still enforced by validateModelParams downstream.
+ */
+function oneOf(value, allowed, flag) {
+    if (value === undefined)
+        return undefined;
+    if (typeof value === 'string' && allowed.includes(value))
+        return value;
+    throw new Error(`Invalid value "${String(value)}" for ${flag}. Valid options: ${allowed.join(', ')}`);
+}
+/** Read an optional string flag */
+function optString(value, flag) {
+    if (value === undefined)
+        return undefined;
+    if (typeof value === 'string')
+        return value;
+    throw new Error(`${flag} expects a string`);
+}
+/** Read an optional integer flag (commander's parseInt yields NaN on junk) */
+function optInt(value, flag) {
+    if (value === undefined)
+        return undefined;
+    if (typeof value === 'number' && Number.isInteger(value))
+        return value;
+    throw new Error(`${flag} expects an integer`);
+}
+/** Read a repeatable string flag */
+function stringList(value, flag) {
+    if (value === undefined)
+        return [];
+    if (Array.isArray(value) && value.every((v) => typeof v === 'string'))
+        return value;
+    throw new Error(`${flag} expects one or more strings`);
+}
+/**
+ * Validate commander's untyped option bag into CLIOptions field by field.
+ */
+function readOptions(raw) {
+    const logLevel = oneOf(typeof raw.logLevel === 'string' ? raw.logLevel.toUpperCase() : raw.logLevel, LOG_LEVELS, '--log-level');
+    return {
+        model: optString(raw.model, '--model'),
+        sunburst: Boolean(raw.sunburst),
+        flare: Boolean(raw.flare),
+        gptImage2: Boolean(raw.gptImage2),
+        gptImage15: Boolean(raw.gptImage15),
+        gptImage1: Boolean(raw.gptImage1),
+        gptImage1Mini: Boolean(raw.gptImage1Mini),
+        edit: Boolean(raw.edit),
+        stream: Boolean(raw.stream),
+        partialImages: optInt(raw.partialImages, '--partial-images'),
+        prompt: stringList(raw.prompt, '--prompt'),
+        image: stringList(raw.image, '--image'),
+        mask: optString(raw.mask, '--mask'),
+        size: optString(raw.size, '--size'),
+        quality: oneOf(raw.quality, QUALITIES, '--quality'),
+        n: optInt(raw.n, '--n'),
+        user: optString(raw.user, '--user'),
+        background: oneOf(raw.background, BACKGROUNDS, '--background'),
+        moderation: oneOf(raw.moderation, MODERATIONS, '--moderation'),
+        outputFormat: oneOf(raw.outputFormat, OUTPUT_FORMATS, '--output-format'),
+        outputCompression: optInt(raw.outputCompression, '--output-compression'),
+        inputFidelity: oneOf(raw.inputFidelity, INPUT_FIDELITIES, '--input-fidelity'),
+        apiKey: optString(raw.apiKey, '--api-key'),
+        outputDir: optString(raw.outputDir, '--output-dir'),
+        logLevel: logLevel ?? 'INFO',
+        dryRun: Boolean(raw.dryRun),
+        examples: Boolean(raw.examples),
+    };
+}
 /**
  * Display usage examples.
  */
@@ -142,7 +222,7 @@ ${'='.repeat(70)}
 function resolveModel(options) {
     if (options.model) {
         if (!isSupportedModel(options.model)) {
-            throw new Error(`Unsupported model "${options.model}". Supported: ${Object.values(MODELS).join(', ')} (and dated snapshots)`);
+            throw new Error(unknownModelMessage(options.model));
         }
         return options.model;
     }
@@ -217,6 +297,39 @@ function partialImageWriter(outputDir, stem, format, sink) {
     };
 }
 /**
+ * Execute one generate or edit request end to end: spinner, (streaming) call,
+ * partial-frame capture, persistence, and the success summary. Throws on
+ * failure after stopping the spinner; the caller decides whether to continue.
+ */
+async function runRequest(job) {
+    const { api, model, operation, prompt, outputDir, stream, outputFormat } = job;
+    const tag = operation === 'edit' ? `${model}-edit` : model;
+    const stem = requestStem(prompt, tag);
+    const partialPaths = [];
+    const spinner = createSpinner(operation === 'edit' ? 'Editing image' : 'Generating image').start();
+    try {
+        const handlers = { onPartialImage: partialImageWriter(outputDir, stem, outputFormat ?? 'png', partialPaths) };
+        let response;
+        if (job.operation === 'edit') {
+            response = stream
+                ? await api.generateImageEditStream(job.params, handlers)
+                : await api.generateImageEdit(job.params);
+        }
+        else {
+            response = stream ? await api.generateImageStream(job.params, handlers) : await api.generateImage(job.params);
+        }
+        spinner.stop(operation === 'edit' ? 'Image edit complete' : 'Image generation complete');
+        const { savedPaths, metadataPath } = await persistResult(api, response, outputDir, model, operation, stem, job.params, outputFormat, partialPaths);
+        logger.info(`\n✓ Success! Generated ${savedPaths.length} ${operation === 'edit' ? 'edited ' : ''}image(s):`);
+        savedPaths.forEach((p) => logger.info(`  - ${p}`));
+        logger.info(`  - ${metadataPath}`);
+    }
+    catch (error) {
+        spinner.fail(`${operation === 'edit' ? 'Edit' : 'Generation'} failed: ${getErrorMessage(error)}`);
+        throw error;
+    }
+}
+/**
  * Parse and validate CLI arguments.
  */
 program
@@ -263,11 +376,18 @@ program
     .option('--dry-run', 'Validate parameters without making API call')
     .option('--examples', 'Show usage examples');
 program.parse(process.argv);
-const options = program.opts();
 /**
  * Main CLI execution.
  */
 async function main() {
+    let options;
+    try {
+        options = readOptions(program.opts());
+    }
+    catch (error) {
+        logger.error(`\n✗ Error: ${getErrorMessage(error)}\n`);
+        process.exit(1);
+    }
     try {
         // Show examples if requested
         if (options.examples) {
@@ -279,24 +399,20 @@ async function main() {
             program.outputHelp();
             process.exit(0);
         }
-        // Set log level
-        if (options.logLevel) {
-            setLogLevel(options.logLevel);
-        }
+        setLogLevel(options.logLevel);
         const model = resolveModel(options);
-        const isEdit = Boolean(options.edit);
+        const operation = options.edit ? 'edit' : 'generate';
         const constraints = getModelConstraints(model);
-        if (isEdit && (!constraints || !constraints.supportsEdit)) {
+        if (operation === 'edit' && (!constraints || !constraints.supportsEdit)) {
             throw new Error(`Model ${model} does not support image editing`);
         }
         if (options.partialImages !== undefined && !options.stream) {
             throw new Error('--partial-images requires --stream');
         }
-        // Validate required parameters
         if (options.prompt.length === 0) {
             throw new Error('--prompt is required');
         }
-        if (isEdit && options.image.length === 0) {
+        if (operation === 'edit' && options.image.length === 0) {
             throw new Error('--image is required for --edit');
         }
         const deprecation = getModelDeprecation(model);
@@ -304,22 +420,14 @@ async function main() {
             logger.warn(`${model} is scheduled for removal on ${deprecation.shutdown}; migrate to ${deprecation.replacement}`);
         }
         // Initialize API
-        const api = new OpenAIImageAPI({
-            apiKey: options.apiKey,
-            logLevel: options.logLevel,
-        });
-        // Determine output directory
-        let outputDir;
-        if (options.outputDir) {
-            // Validate user-provided output path for path traversal
-            outputDir = validateOutputPath(options.outputDir);
-        }
-        else {
-            outputDir = path.join(getOutputDir(), model);
-        }
+        const api = new OpenAIImageAPI({ apiKey: options.apiKey, logLevel: options.logLevel });
+        // Determine output directory (user-provided paths are checked for traversal)
+        const outputDir = options.outputDir
+            ? validateOutputPath(options.outputDir)
+            : path.join(getOutputDir(), model);
         await ensureDirectory(outputDir);
         logger.info(`Using model: ${model}`);
-        logger.info(`Operation: ${isEdit ? 'edit' : 'generate'}${options.stream ? ' (streaming)' : ''}`);
+        logger.info(`Operation: ${operation}${options.stream ? ' (streaming)' : ''}`);
         logger.info(`Output directory: ${outputDir}`);
         const common = {
             model,
@@ -333,88 +441,52 @@ async function main() {
             user: options.user,
             partial_images: options.stream ? options.partialImages : undefined,
         };
-        if (isEdit) {
-            // Image editing — first prompt only
-            const prompt = options.prompt[0];
+        // Edits take the first prompt only; generation batches over every prompt.
+        // options.prompt is non-empty here (checked above), so slice(0, 1) is one item.
+        const prompts = operation === 'edit' ? options.prompt.slice(0, 1) : options.prompt;
+        const editImage = options.image.length === 1 ? options.image.join('') : options.image;
+        for (const [i, prompt] of prompts.entries()) {
+            const promptNum = prompts.length > 1 ? ` [${i + 1}/${prompts.length}]` : '';
             logger.info(`\n${'='.repeat(60)}`);
-            logger.info(`Editing ${options.image.length} image(s) with prompt: "${prompt.substring(0, 50)}..."`);
+            logger.info(operation === 'edit'
+                ? `Editing ${options.image.length} image(s) with prompt: "${prompt.substring(0, 50)}..."`
+                : `Processing prompt${promptNum}: "${prompt.substring(0, 60)}..."`);
             logger.info(`${'='.repeat(60)}`);
-            const params = {
-                ...common,
-                image: options.image.length === 1 ? options.image[0] : options.image,
-                prompt,
-                mask: options.mask,
-                input_fidelity: options.inputFidelity,
-            };
+            const base = { api, model, prompt, outputDir, stream: Boolean(options.stream), outputFormat: options.outputFormat };
+            const job = operation === 'edit'
+                ? {
+                    ...base,
+                    operation,
+                    params: {
+                        ...common,
+                        image: editImage,
+                        prompt,
+                        mask: options.mask,
+                        input_fidelity: options.inputFidelity,
+                    },
+                }
+                : { ...base, operation, params: { ...common, prompt } };
             if (options.dryRun) {
-                dryRun(model, params);
-                return;
+                dryRun(model, job.params);
+                continue;
             }
-            const spinner = createSpinner('Editing image').start();
-            const partialPaths = [];
-            const stem = requestStem(prompt, `${model}-edit`);
             try {
-                const format = options.outputFormat ?? 'png';
-                const response = options.stream
-                    ? await api.generateImageEditStream(params, {
-                        onPartialImage: partialImageWriter(outputDir, stem, format, partialPaths),
-                    })
-                    : await api.generateImageEdit(params);
-                spinner.stop('Image edit complete');
-                const { savedPaths, metadataPath } = await persistResult(api, response, outputDir, model, 'edit', stem, params, options.outputFormat, partialPaths);
-                logger.info(`\n✓ Success! Generated ${savedPaths.length} edited image(s):`);
-                savedPaths.forEach((p) => logger.info(`  - ${p}`));
-                logger.info(`  - ${metadataPath}`);
+                await runRequest(job);
             }
             catch (error) {
-                spinner.fail(`Edit failed: ${error.message}`);
-                throw error;
-            }
-        }
-        else {
-            // Batch generation: process each prompt
-            for (let i = 0; i < options.prompt.length; i++) {
-                const prompt = options.prompt[i];
-                const promptNum = options.prompt.length > 1 ? ` [${i + 1}/${options.prompt.length}]` : '';
-                logger.info(`\n${'='.repeat(60)}`);
-                logger.info(`Processing prompt${promptNum}: "${prompt.substring(0, 60)}..."`);
-                logger.info(`${'='.repeat(60)}`);
-                const params = { ...common, prompt };
-                if (options.dryRun) {
-                    dryRun(model, params);
-                    continue;
+                // A batch keeps going past one failed prompt; a single request surfaces it
+                if (prompts.length > 1) {
+                    logger.error('Continuing with next prompt...');
                 }
-                const spinner = createSpinner('Generating image').start();
-                const partialPaths = [];
-                const stem = requestStem(prompt, model);
-                try {
-                    const format = options.outputFormat ?? 'png';
-                    const response = options.stream
-                        ? await api.generateImageStream(params, {
-                            onPartialImage: partialImageWriter(outputDir, stem, format, partialPaths),
-                        })
-                        : await api.generateImage(params);
-                    spinner.stop('Image generation complete');
-                    const { savedPaths, metadataPath } = await persistResult(api, response, outputDir, model, 'generate', stem, params, options.outputFormat, partialPaths);
-                    logger.info(`\n✓ Success! Generated ${savedPaths.length} image(s):`);
-                    savedPaths.forEach((p) => logger.info(`  - ${p}`));
-                    logger.info(`  - ${metadataPath}`);
-                }
-                catch (error) {
-                    spinner.fail(`Generation failed: ${error.message}`);
-                    if (options.prompt.length > 1) {
-                        logger.error('Continuing with next prompt...');
-                    }
-                    else {
-                        throw error;
-                    }
+                else {
+                    throw error;
                 }
             }
         }
         logger.info('\n✓ All operations completed successfully!\n');
     }
     catch (error) {
-        logger.error(`\n✗ Error: ${error.message}\n`);
+        logger.error(`\n✗ Error: ${getErrorMessage(error)}\n`);
         process.exit(1);
     }
 }
