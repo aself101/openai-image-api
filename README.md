@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/openai-image-api.svg)](https://www.npmjs.com/package/openai-image-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/openai-image-api)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-187%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-205%20passing-brightgreen)](test/)
 
 A Node.js wrapper for the [OpenAI Image API](https://developers.openai.com/api/reference/resources/images) — `/v1/images/generations` and `/v1/images/edits` — for the GPT Image model family: **GPT Image 2.5** (Sunburst, Flare), **GPT Image 2**, and the deprecated GPT Image 1.x models. Generate and edit images, with streaming partial-image delivery, via CLI or programmatic API.
 
@@ -81,6 +81,8 @@ The package wraps the two Image API endpoints:
 
 Every request is validated client-side against the model's published constraints (sizes, quality tiers, formats, `n`, `partial_images`, `input_fidelity`) before any network call, so a bad parameter fails fast with a specific message rather than a generic 400.
 
+**The constraint tables are a transcription of OpenAI's reference as of 2026-09-20.** That cuts both ways: when OpenAI *tightens* a limit the request goes out and the API's own 400 comes back; when OpenAI *loosens* one, or ships a model this release does not know, the validator says no before the network. For that case pass `skipValidation: true` (library) or `--no-validate` (CLI): the request is sent as-is and the API is the judge. `--dry-run` reports what this package would reject, not what the API would.
+
 The Responses API `image_generation` *tool* (multi-turn conversational editing) is a different surface and is not wrapped here.
 
 ## Models
@@ -104,7 +106,7 @@ The Responses API `image_generation` *tool* (multi-turn conversational editing) 
 
 **Dated snapshots** — `gpt-image-2.5-sunburst-2026-09-08`, `gpt-image-2.5-flare-2026-09-08`, `gpt-image-2-2026-04-21` — are accepted anywhere a model is, via `--model <id>` on the CLI or `model:` in code, and validate with their family's constraints.
 
-**Deprecated models** still work until their shutdown dates. The API class logs a warning (once per model per instance) when one is used; the CLI prints the same notice. Source: [OpenAI deprecations](https://developers.openai.com/api/docs/deprecations).
+**Deprecated models** still work until their shutdown dates. The API class logs a warning (once per model per instance) when one is used; the CLI prints the same notice. The dates are relayed, not enforced — after the date the notice changes tense and the request still goes out, coming back as the API's 404. Source: [OpenAI deprecations](https://developers.openai.com/api/docs/deprecations).
 
 ## Authentication Setup
 
@@ -246,7 +248,7 @@ openai-image-api/
 ├── src/
 │   ├── api.ts              # OpenAIImageAPI class (buffered + streaming)
 │   ├── config.ts           # Model constraints, deprecations, validation
-│   ├── utils.ts            # File I/O, SSRF-safe URL checks, SSE parser
+│   ├── utils.ts            # File I/O, image header checks, SSE parser
 │   ├── cli.ts              # CLI entry point
 │   └── types.ts            # Type definitions
 ├── dist/                   # Compiled JavaScript (committed for npm)
@@ -314,6 +316,7 @@ openai-img --stream --partial-images 2 --prompt "a cat"
 | `--input-fidelity <level>` | `high`, `low` — gpt-image-1.x edits only |
 | `--stream` | Stream the response |
 | `--partial-images <n>` | 0–3 partial frames (requires `--stream`) |
+| `--no-validate` | Skip the client-side constraint check; accepts any `--model` id |
 | `--user <id>` | End-user identifier |
 | `--api-key <key>` | Override environment key |
 | `--output-dir <path>` | Output directory (default `datasets/openai/<model>`) |
@@ -321,7 +324,7 @@ openai-img --stream --partial-images 2 --prompt "a cat"
 | `--dry-run` | Validate parameters without calling the API |
 | `--examples` | Show usage examples |
 
-`--dry-run` runs the same validator the API class does, so it reports the exact rejection a real request would receive.
+`--dry-run` runs the same validator the API class does, so it reports the rejection *this package* would issue; with `--no-validate` it prints the parameters as they would be sent.
 
 ## API Methods
 
@@ -334,8 +337,9 @@ const api = new OpenAIImageAPI({
   apiKey: 'sk-...',          // default: OPENAI_API_KEY
   baseUrl: 'https://...',    // default: https://api.openai.com (HTTPS enforced)
   logLevel: 'INFO',          // DEBUG | INFO | WARNING | ERROR
-  rateLimitDelay: 1000,      // ms between requests
+  rateLimitDelay: 1000,      // ms between requests (serialized across concurrent calls)
   requestTimeout: 180000,    // ms; image generation can take minutes at high quality
+  skipValidation: false,     // true: send unknown models / out-of-table params, let the API judge
 });
 ```
 
@@ -498,7 +502,7 @@ datasets/
         └── ...
 ```
 
-Partial frames, the final image, and the metadata sidecar for one request share a timestamp stem so they sort together.
+Partial frames, the final image, and the metadata sidecar for one request share a stem — `YYYY-MM-DD_HH-MM-SS-mmm_<4 hex>_<model>_<prompt>` — so they sort together and two processes rendering the same prompt in the same millisecond do not overwrite each other. Prompt text keeps letters and digits in any script (a Japanese prompt keeps its characters); everything else becomes `_`. `saveImages()` applies no sanitizing to the `baseFilename` you pass — that is the caller's string.
 
 **Metadata Format:**
 
@@ -542,7 +546,7 @@ npm run test:ui
 npm run test:coverage
 ```
 
-The suite has 187 tests across four files:
+The suite has 205 tests across four files:
 
 - **config** — model catalogue and deprecation table, flexible-size rules (multiples of 16, aspect ratio, pixel bounds), per-model quality gating, `input_fidelity` rejection, cross-field rules (transparent+jpeg, compression without jpeg/webp), snapshot resolution.
 - **api** — request payloads per model family, default model, deprecation warning once per model, streaming (SSE reassembly across chunk boundaries, event ordering, callback wrapper, error-body recovery from a failed stream, terminal error events), edit pre-flight, `saveImages`, security (HTTPS enforcement, key redaction, production error sanitisation, rate limiting).
@@ -553,7 +557,7 @@ Network calls are mocked. Live verification of streaming, editing, and the `inpu
 
 ## Error Handling
 
-Every failure from the API class is an `OpenAIImageAPIError` (exported from the main entry). The `message` is the stable human-readable vocabulary below; the fields let you branch without parsing it:
+Every failure thrown by `OpenAIImageAPI` methods is an `OpenAIImageAPIError` (exported from the main entry) — API responses, client-side rejections, input-file checks, and stream failures alike. The `message` is the stable human-readable vocabulary below; the fields let you branch without parsing it:
 
 ```typescript
 import { OpenAIImageAPI, OpenAIImageAPIError } from 'openai-image-api';
@@ -562,14 +566,17 @@ try {
   await api.generateImage({ prompt });
 } catch (err) {
   if (err instanceof OpenAIImageAPIError) {
-    err.status;      // HTTP status, when the API answered
+    err.status;      // HTTP status when the API answered; undefined for client-side rejections
     err.code;        // API error.code — the stable discriminator
-    err.type;        // e.g. 'image_generation_user_error': fix the prompt/input, do not retry unchanged
+    err.type;        // API error.type (e.g. 'image_generation_user_error': fix the input, do not retry unchanged)
+                     // or the package's own: 'validation_error' | 'input_error' | 'configuration_error' | 'stream_error'
     err.apiMessage;  // the API's own message, even when NODE_ENV=production sanitizes err.message
-    err.cause;       // the original axios error
+    err.cause;       // the original axios error (or the underlying fs error for input_error)
   }
 }
 ```
+
+The constructor throws a plain `Error` for a non-HTTPS `baseUrl`; that is configuration, not a request.
 
 | Error | Meaning |
 |---|---|
@@ -577,7 +584,8 @@ try {
 | `Bad request: <API message>` | 400 — the API's own message is passed through (sanitised to a generic string when `NODE_ENV=production`) |
 | `Rate limit exceeded. Please try again later.` | 429 |
 | `OpenAI service error. Please try again later.` | 500 / 502 / 503 |
-| `Parameter validation failed:\n  - ...` | Rejected client-side before any request; lists every failing rule |
+| `Parameter validation failed:\n  - ...` | Rejected client-side before any request; lists every failing rule (`type: 'validation_error'`) |
+| `Streaming requests generate a single image; omit n or set it to 1` | This package's streaming wrappers return one image; `n > 1` on a stream is refused |
 | `Image file not found: <path>` / `File does not appear to be a valid image` | Edit input failed the pre-upload check |
 | `Unknown model "<id>". Supported: ...` | Model id not in the catalogue (DALL-E ids land here) |
 | `Stream error: <message>` | The API sent a terminal `error` event mid-stream (`type: 'stream_error'`) |
@@ -599,6 +607,12 @@ Set `OPENAI_API_KEY` via one of the four methods in [Authentication Setup](#auth
 
 ### `does not support the 'input_fidelity' parameter`
 You're editing with gpt-image-2 or a 2.5 model. Drop `--input-fidelity`; these models always use high fidelity. The client-side validator catches this before the request when the model is known.
+
+### CI runner shows `Bad request: Invalid request parameters`
+`NODE_ENV=production` sanitizes `message`. The CLI appends the API's own reason in parentheses (`API: ...; code: ...`) and the library keeps it on `err.apiMessage`.
+
+### The API accepts something this package rejects
+The constraint tables date from 2026-09-20. Pass `--no-validate` / `skipValidation: true` and file an issue with the API's response so the table can be updated.
 
 ### Requests time out
 Default timeout is 180 s. `max` quality at large sizes can exceed that; raise `requestTimeout` in `APIOptions`.
@@ -624,7 +638,7 @@ A 400 mentioning verification means your org must complete [API Organization Ver
 
 Other behaviour changes:
 
-- **Default model** is `gpt-image-2.5-flare`, not `dall-e-2`.
+- **Default model** is `gpt-image-2.5-flare`, not `dall-e-2`. Cost note: `dall-e-2` had been returning 404 since 2026-05-12, so no working 2.x default is being upgraded — but a pipeline that pinned `openai-image-api@2` and switches to 3 with no `--quality` flag now pays GPT Image 2.5 `auto`-quality token rates (see [pricing](https://developers.openai.com/api/docs/pricing#image-generation)). Set `--quality low` for drafts.
 - **`gpt-image-1.5` now actually works.** In 2.1.x its options were gated on `model === 'gpt-image-1'`, so 1.5 requests carried `response_format` (a 400) and silently dropped `background`/`output_format`/`moderation`/`input_fidelity`. All GPT Image models now share one code path.
 - **Streaming exists.** The 2.1.0 changelog announced partial-image streaming; only a constraints entry shipped. `streamImage`, `generateImageStream`, `streamImageEdit`, `generateImageEditStream`, and `--stream` are new in 3.0.0.
 - **`--dry-run` validates.** Previously it printed parameters and declared them valid without checking.

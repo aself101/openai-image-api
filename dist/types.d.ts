@@ -57,6 +57,16 @@ export interface APIOptions {
      * shipped in 2.1.0 aborted ordinary high-quality requests.
      */
     requestTimeout?: number;
+    /**
+     * Send requests without the client-side constraint check (default: false).
+     *
+     * The constraint tables are a transcription of OpenAI's reference on a
+     * given date. When OpenAI adds a model or loosens a limit, this package
+     * refuses the request before the network until a release catches up. Set
+     * this to let the API be the judge: unknown model ids and out-of-table
+     * parameters are sent as-is and the API's own error comes back.
+     */
+    skipValidation?: boolean;
 }
 /** Parameters shared by generation and edit requests */
 export interface CommonImageParams {

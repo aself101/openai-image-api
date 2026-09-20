@@ -15,6 +15,7 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import { randomBytes } from 'crypto';
 import winston from 'winston';
 import type { Readable } from 'stream';
 import type { Spinner, Logger, RawSSEEvent } from './types.js';
@@ -74,36 +75,42 @@ export function getErrorCode(error: unknown): string | undefined {
 }
 
 /**
- * Validate that file exists and is a valid image file.
+ * Validate that a file exists, is non-empty, is within a size limit, and
+ * carries the magic bytes of a format the Image API accepts (PNG, JPEG, WebP).
+ *
+ * Only the first 12 bytes are read: a 50 MB input costs one small read, not a
+ * whole-file buffer per image. GIF is not accepted — the API's documented
+ * input formats are png, webp, jpg.
  *
  * @param filepath - Path to image file
+ * @param maxSize - Maximum file size in bytes (default 50 MB, the API limit)
  * @returns The validated filepath
- * @throws Error If file doesn't exist or is not a valid image
+ * @throws Error If the file is missing, unreadable, empty, too large, or not an image
  */
-export async function validateImagePath(filepath: string): Promise<string> {
+export async function validateImagePath(filepath: string, maxSize: number = 50 * 1024 * 1024): Promise<string> {
+  let handle: fs.FileHandle | undefined;
   try {
-    const buffer = await fs.readFile(filepath);
+    handle = await fs.open(filepath, 'r');
+    const { size } = await handle.stat();
 
-    // Check file size (must be > 0)
-    if (buffer.length === 0) {
+    if (size === 0) {
       throw new Error(`Image file is empty: ${filepath}`);
     }
+    if (size > maxSize) {
+      const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+      throw new Error(`Image file ${filepath} is ${mb(size)}MB; the limit is ${mb(maxSize)}MB`);
+    }
 
-    // Check magic bytes for common image formats
-    const magicBytes = buffer.slice(0, 4);
-    const isPNG =
-      magicBytes[0] === 0x89 &&
-      magicBytes[1] === 0x50 &&
-      magicBytes[2] === 0x4e &&
-      magicBytes[3] === 0x47;
-    const isJPEG = magicBytes[0] === 0xff && magicBytes[1] === 0xd8 && magicBytes[2] === 0xff;
-    const isWebP = buffer.slice(8, 12).toString() === 'WEBP';
-    const isGIF = magicBytes.slice(0, 3).toString() === 'GIF';
+    const header = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(header, 0, 12, 0);
+    const magic = header.subarray(0, bytesRead);
 
-    if (!isPNG && !isJPEG && !isWebP && !isGIF) {
-      throw new Error(
-        `File does not appear to be a valid image (PNG, JPEG, WebP, or GIF): ${filepath}`
-      );
+    const isPNG = magic.length >= 4 && magic[0] === 0x89 && magic[1] === 0x50 && magic[2] === 0x4e && magic[3] === 0x47;
+    const isJPEG = magic.length >= 3 && magic[0] === 0xff && magic[1] === 0xd8 && magic[2] === 0xff;
+    const isWebP = magic.length >= 12 && magic.subarray(0, 4).toString() === 'RIFF' && magic.subarray(8, 12).toString() === 'WEBP';
+
+    if (!isPNG && !isJPEG && !isWebP) {
+      throw new Error(`File does not appear to be a valid image (PNG, JPEG, or WebP): ${filepath}`);
     }
 
     return filepath;
@@ -113,8 +120,12 @@ export async function validateImagePath(filepath: string): Promise<string> {
       throw new Error(`Image file not found: ${filepath}`, { cause: error });
     } else if (code === 'EACCES') {
       throw new Error(`Permission denied reading image file: ${filepath}`, { cause: error });
+    } else if (code === 'EISDIR') {
+      throw new Error(`Image path is a directory, not a file: ${filepath}`, { cause: error });
     }
     throw error;
+  } finally {
+    await handle?.close();
   }
 }
 
@@ -253,9 +264,12 @@ export async function decodeBase64Image(b64Data: string, filepath: string): Prom
  * @returns Sanitized text safe for filenames
  */
 export function sanitizeForFilename(text: string, maxLength: number = 50): string {
+  // Letters and digits in any script are kept, so a Japanese or Cyrillic prompt
+  // does not collapse to an empty stem; everything else becomes one underscore.
   return text
+    .normalize('NFKC')
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/[^\p{L}\p{N}]+/gu, '_')
     .replace(/^_+|_+$/g, '')
     .substring(0, maxLength);
 }
@@ -284,11 +298,14 @@ export function generateTimestampedFilename(
   model: string,
   extension: string = 'png'
 ): string {
-  // ISO 8601 is always "YYYY-MM-DDTHH:MM:SS.mmmZ"; keep the date and HH-MM-SS
+  // ISO 8601 is always "YYYY-MM-DDTHH:MM:SS.mmmZ"; keep date, HH-MM-SS and ms.
+  // Millisecond resolution plus a 4-hex random tail keeps two processes that
+  // render the same prompt in the same second from overwriting each other.
   const iso = new Date().toISOString().replace(/[:.]/g, '-');
-  const timestamp = `${iso.slice(0, 10)}_${iso.slice(11, 19)}`;
-  const promptPart = promptToFilename(prompt, 40);
-  return `${timestamp}_${model}_${promptPart}.${extension}`;
+  const timestamp = `${iso.slice(0, 10)}_${iso.slice(11, 23)}`;
+  const nonce = randomBytes(2).toString('hex');
+  const promptPart = promptToFilename(prompt, 40) || 'prompt';
+  return `${timestamp}_${nonce}_${model}_${promptPart}.${extension}`;
 }
 
 /**
@@ -381,6 +398,10 @@ export function createSpinner(message: string = 'Processing'): Spinner {
  */
 export async function* parseSSEStream(stream: Readable): AsyncGenerator<RawSSEEvent> {
   let buffer = '';
+  // Where the next boundary search starts. Without it every chunk rescans the
+  // whole buffer, which is quadratic on a multi-megabyte single-line payload;
+  // backing up three characters covers a delimiter split across chunks.
+  let scanFrom = 0;
 
   const flush = (block: string): RawSSEEvent | null => {
     let event: string | undefined;
@@ -404,14 +425,17 @@ export async function* parseSSEStream(stream: Readable): AsyncGenerator<RawSSEEv
     buffer += typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8');
 
     // Events end at a blank line; tolerate CRLF, LF, and a mixed pair
+    const delimiter = /\r?\n\r?\n/g;
+    delimiter.lastIndex = Math.max(0, scanFrom - 3);
     let match: RegExpExecArray | null;
-    while ((match = /\r?\n\r?\n/.exec(buffer)) !== null) {
-      const boundary = match.index;
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + match[0].length);
+    while ((match = delimiter.exec(buffer)) !== null) {
+      const block = buffer.slice(0, match.index);
+      buffer = buffer.slice(match.index + match[0].length);
+      delimiter.lastIndex = 0;
       const parsed = flush(block);
       if (parsed) yield parsed;
     }
+    scanFrom = buffer.length;
   }
 
   if (buffer.trim().length > 0) {
@@ -429,6 +453,7 @@ export async function* parseSSEStream(stream: Readable): AsyncGenerator<RawSSEEv
  *
  * @param stream - Readable to drain
  * @param maxBytes - Refuse to buffer more than this (default 1 MiB)
+ * @returns The stream's bytes decoded as UTF-8
  */
 export async function readStreamToString(stream: Readable, maxBytes: number = 1024 * 1024): Promise<string> {
   const chunks: Buffer[] = [];

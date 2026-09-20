@@ -28,7 +28,7 @@ import { createReadStream } from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
 import winston from 'winston';
-import { getOpenAIApiKey, BASE_URL, ENDPOINTS, DEFAULT_MODEL, unknownModelMessage, validateModelParams, getModelConstraints, getModelDeprecation, } from './config.js';
+import { getOpenAIApiKey, BASE_URL, ENDPOINTS, DEFAULT_MODEL, validateModelParams, getModelConstraints, getModelDeprecation, deprecationNotice, } from './config.js';
 import { decodeBase64Image, parseSSEStream, readStreamToString, validateImagePath, getErrorMessage, } from './utils.js';
 /**
  * Error thrown for every failed API interaction.
@@ -45,7 +45,13 @@ export class OpenAIImageAPIError extends Error {
     status;
     /** `error.code` from the API body, when present */
     code;
-    /** `error.type` from the API body, when present */
+    /**
+     * `error.type` from the API body when the API answered; otherwise one of the
+     * package's own: `validation_error` (rejected by the client-side constraint
+     * check), `input_error` (an input file failed the pre-upload check),
+     * `configuration_error` (no API key), `stream_error` (terminal error event
+     * or early stream end). `status` is undefined for all four.
+     */
     type;
     /** `error.message` from the API body, when present (unsanitized) */
     apiMessage;
@@ -112,6 +118,7 @@ export class OpenAIImageAPI {
     baseUrl;
     rateLimitDelay;
     requestTimeout;
+    skipValidation;
     lastRequestTime;
     /**
      * Serializes rate-limit waits. Without it, concurrent callers on one
@@ -130,8 +137,9 @@ export class OpenAIImageAPI {
      * @param options.logLevel - Logging level (DEBUG, INFO, WARNING, ERROR)
      * @param options.rateLimitDelay - Minimum milliseconds between API requests (default: 1000)
      * @param options.requestTimeout - Per-request timeout in milliseconds (default: 180000)
+     * @param options.skipValidation - Send requests without the client-side constraint check (default: false)
      */
-    constructor({ apiKey = null, baseUrl = BASE_URL, logLevel = 'INFO', rateLimitDelay = 1000, requestTimeout = DEFAULT_REQUEST_TIMEOUT, } = {}) {
+    constructor({ apiKey = null, baseUrl = BASE_URL, logLevel = 'INFO', rateLimitDelay = 1000, requestTimeout = DEFAULT_REQUEST_TIMEOUT, skipValidation = false, } = {}) {
         // Setup logging
         this.logger = winston.createLogger({
             level: logLevel.toLowerCase(),
@@ -150,6 +158,7 @@ export class OpenAIImageAPI {
         // Rate limiting and timeouts
         this.rateLimitDelay = rateLimitDelay;
         this.requestTimeout = requestTimeout;
+        this.skipValidation = skipValidation;
         this.lastRequestTime = 0;
         this.rateLimitQueue = Promise.resolve();
         this.deprecationWarned = new Set();
@@ -162,8 +171,8 @@ export class OpenAIImageAPI {
      */
     _verifyApiKey() {
         if (!this.apiKey) {
-            throw new Error('API key not set. Please provide apiKey during initialization ' +
-                'or set OPENAI_API_KEY environment variable.');
+            throw new OpenAIImageAPIError('API key not set. Please provide apiKey during initialization ' +
+                'or set OPENAI_API_KEY environment variable.', { type: 'configuration_error' });
         }
     }
     /**
@@ -186,8 +195,7 @@ export class OpenAIImageAPI {
         if (!deprecation || this.deprecationWarned.has(model))
             return;
         this.deprecationWarned.add(model);
-        this.logger.warn(`Model ${model} is scheduled for removal from the OpenAI API on ${deprecation.shutdown}. ` +
-            `Migrate to ${deprecation.replacement}.`);
+        this.logger.warn(deprecationNotice(model, deprecation));
     }
     /**
      * Sanitize error message for production use.
@@ -482,53 +490,80 @@ export class OpenAIImageAPI {
         }
         return formData;
     }
+    /** Throw a client-side rejection in the package's error vocabulary */
+    _reject(message, type, cause) {
+        throw new OpenAIImageAPIError(message, { type, cause });
+    }
     /**
-     * Shared pre-flight for generation requests.
+     * Run the constraint check unless the caller opted out. In skip mode the
+     * request is sent as-is and the API's own answer is what the caller gets.
      */
-    _prepareGenerate(params) {
-        this._verifyApiKey();
-        const model = params.model ?? DEFAULT_MODEL;
-        if (!params.prompt) {
-            throw new Error('Prompt is required');
+    _validate(model, params, streaming) {
+        if (streaming && params.n !== undefined && params.n !== 1) {
+            // This package's streaming wrappers return on the first completed event;
+            // a multi-image stream would bill images this code never surfaces.
+            this._reject('Streaming requests generate a single image; omit n or set it to 1', 'validation_error');
+        }
+        if (this.skipValidation) {
+            if (!getModelConstraints(model)) {
+                this.logger.warn(`Model ${model} is not in this package's catalogue; sending unvalidated (skipValidation)`);
+            }
+            return;
         }
         const validation = validateModelParams(model, params);
         if (!validation.valid) {
-            throw new Error(`Parameter validation failed:\n  - ${validation.errors.join('\n  - ')}`);
+            const hint = validation.errors.length === 1 && validation.errors[0]?.startsWith('Unknown model')
+                ? '\n  (pass skipValidation: true to send it to the API anyway)'
+                : '';
+            this._reject(`Parameter validation failed:\n  - ${validation.errors.join('\n  - ')}${hint}`, 'validation_error');
         }
+    }
+    /**
+     * Shared pre-flight for generation requests.
+     */
+    _prepareGenerate(params, streaming = false) {
+        this._verifyApiKey();
+        const model = params.model ?? DEFAULT_MODEL;
+        if (!params.prompt) {
+            this._reject('Prompt is required', 'validation_error');
+        }
+        this._validate(model, params, streaming);
         this._warnIfDeprecated(model);
         return model;
     }
     /**
      * Shared pre-flight for edit requests.
      */
-    async _prepareEdit(params) {
+    async _prepareEdit(params, streaming = false) {
         this._verifyApiKey();
         const model = params.model ?? DEFAULT_MODEL;
         if (!params.image || (Array.isArray(params.image) && params.image.length === 0)) {
-            throw new Error('Image is required for edit operation');
+            this._reject('Image is required for edit operation', 'validation_error');
         }
         if (!params.prompt) {
-            throw new Error('Prompt is required');
+            this._reject('Prompt is required', 'validation_error');
         }
         const constraints = getModelConstraints(model);
-        if (!constraints) {
-            throw new Error(unknownModelMessage(model));
-        }
-        if (!constraints.supportsEdit) {
-            throw new Error(`Model ${model} does not support image editing`);
-        }
         const images = Array.isArray(params.image) ? params.image : [params.image];
-        if (images.length > constraints.editMaxImages) {
-            throw new Error(`${model} accepts at most ${constraints.editMaxImages} input images`);
+        if (constraints) {
+            if (!constraints.supportsEdit) {
+                this._reject(`Model ${model} does not support image editing`, 'validation_error');
+            }
+            if (images.length > constraints.editMaxImages && !this.skipValidation) {
+                this._reject(`${model} accepts at most ${constraints.editMaxImages} input images`, 'validation_error');
+            }
         }
-        const validation = validateModelParams(model, params);
-        if (!validation.valid) {
-            throw new Error(`Parameter validation failed:\n  - ${validation.errors.join('\n  - ')}`);
-        }
-        // Fail fast on inputs the API would reject: missing files and non-image
-        // bytes, checked by magic number before any upload begins.
+        this._validate(model, params, streaming);
+        // Fail fast on inputs the API would reject: missing files, oversize files
+        // and non-image bytes, checked by header before any upload begins.
+        const maxSize = constraints?.imageMaxSize;
         for (const file of params.mask ? [...images, params.mask] : images) {
-            await validateImagePath(file);
+            try {
+                await validateImagePath(file, maxSize);
+            }
+            catch (error) {
+                this._reject(getErrorMessage(error), 'input_error', error);
+            }
         }
         this._warnIfDeprecated(model);
         return model;
@@ -576,7 +611,7 @@ export class OpenAIImageAPI {
      * @param params - Generation parameters plus `partial_images`
      */
     async *streamImage(params) {
-        const model = this._prepareGenerate(params);
+        const model = this._prepareGenerate(params, true);
         const payload = this._buildGeneratePayload({ ...params, model, stream: true });
         this.logger.info(`Streaming image with ${model}: "${params.prompt.substring(0, 50)}..."`);
         this.logger.debug(`Request payload: ${JSON.stringify(payload)}`);
@@ -602,7 +637,7 @@ export class OpenAIImageAPI {
                 return this._completedToResponse(event);
             }
         }
-        throw new Error('Stream ended without an image_generation.completed event');
+        throw new OpenAIImageAPIError('Stream ended without an image_generation.completed event', { type: 'stream_error' });
     }
     // ===========================================================================
     // Editing
@@ -630,7 +665,7 @@ export class OpenAIImageAPI {
      * @param params - Edit parameters plus `partial_images`
      */
     async *streamImageEdit(params) {
-        const model = await this._prepareEdit(params);
+        const model = await this._prepareEdit(params, true);
         const formData = this._buildEditForm({ ...params, model, stream: true });
         this.logger.info(`Streaming edit with ${model}: "${params.prompt.substring(0, 50)}..."`);
         yield* this._makeStreamRequest(ENDPOINTS.edit, formData, true);
@@ -655,7 +690,7 @@ export class OpenAIImageAPI {
                 return this._completedToResponse(event);
             }
         }
-        throw new Error('Stream ended without an image_edit.completed event');
+        throw new OpenAIImageAPIError('Stream ended without an image_edit.completed event', { type: 'stream_error' });
     }
     // ===========================================================================
     // Persistence

@@ -20,7 +20,7 @@ import { Command } from 'commander';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
-import { OpenAIImageAPI } from './api.js';
+import { OpenAIImageAPI, OpenAIImageAPIError } from './api.js';
 import {
   generateTimestampedFilename,
   writeToFile,
@@ -39,7 +39,9 @@ import {
   isSupportedModel,
   validateModelParams,
   unknownModelMessage,
+  deprecationNotice,
   MODELS,
+  MODEL_DEPRECATIONS,
   DEFAULT_MODEL,
 } from './config.js';
 import type {
@@ -71,6 +73,23 @@ try {
   version = (JSON.parse(readFileSync(packageJsonPath, 'utf8')) as PackageJson).version;
 } catch {
   // A missing or malformed manifest only affects --version output
+}
+
+/**
+ * Format an error for the terminal. When the message was sanitized
+ * (NODE_ENV=production) the API's own reason is still on apiMessage; a CI
+ * runner needs that line to tell a moderation block from a bad size.
+ */
+function describeError(error: unknown): string {
+  const message = getErrorMessage(error);
+  if (error instanceof OpenAIImageAPIError) {
+    const extra: string[] = [];
+    if (error.apiMessage && !message.includes(error.apiMessage)) extra.push(`API: ${error.apiMessage}`);
+    if (error.code) extra.push(`code: ${error.code}`);
+    if (error.type && error.status !== undefined) extra.push(`type: ${error.type}`);
+    return extra.length ? `${message} (${extra.join('; ')})` : message;
+  }
+  return message;
 }
 
 /**
@@ -107,6 +126,8 @@ interface CLIOptions {
   edit?: boolean;
   stream?: boolean;
   partialImages?: number;
+  /** commander's --no-validate sets `validate: false`; default true */
+  validate: boolean;
 
   // Common parameters
   prompt: string[];
@@ -191,6 +212,7 @@ function readOptions(raw: Record<string, unknown>): CLIOptions {
     gptImage1Mini: Boolean(raw.gptImage1Mini),
     edit: Boolean(raw.edit),
     stream: Boolean(raw.stream),
+    validate: raw.validate !== false,
     partialImages: optInt(raw.partialImages, '--partial-images'),
     prompt: stringList(raw.prompt, '--prompt'),
     image: stringList(raw.image, '--image'),
@@ -310,7 +332,10 @@ and the 2.5 models process inputs at high fidelity automatically.
 gpt-image-1.5, gpt-image-1, gpt-image-1-mini (deprecated):
   - Sizes: 1024x1024, 1536x1024, 1024x1536, auto
   - Quality: auto, low, medium, high
-  - Shutdown: gpt-image-1 on 2026-10-23; 1.5 and 1-mini on 2026-12-01
+  - Shutdown: gpt-image-1 on ${MODEL_DEPRECATIONS['gpt-image-1']?.shutdown}; 1.5 and 1-mini on ${MODEL_DEPRECATIONS['gpt-image-1.5']?.shutdown}
+
+Newer than this release? Pass --model <id> --no-validate to send an id or
+parameter the catalogue does not know; the API's own answer comes back.
 
 Flexible size rules (gpt-image-2 / 2.5):
   - Width and height multiples of 16
@@ -328,7 +353,12 @@ ${'='.repeat(70)}
 function resolveModel(options: CLIOptions): ImageModel {
   if (options.model) {
     if (!isSupportedModel(options.model)) {
-      throw new Error(unknownModelMessage(options.model));
+      if (options.validate) {
+        throw new Error(`${unknownModelMessage(options.model)}\n  (pass --no-validate to send it to the API anyway)`);
+      }
+      logger.warn(`Model ${options.model} is not in this package's catalogue; sending unvalidated (--no-validate)`);
+      // SAFETY: --no-validate is the caller's explicit choice to let the API judge the id
+      return options.model as ImageModel;
     }
     return options.model;
   }
@@ -346,12 +376,16 @@ function resolveModel(options: CLIOptions): ImageModel {
  * real request would be rejected for instead of printing the parameters and
  * declaring them valid. (Through 2.1.1 the dry-run path never validated.)
  */
-function dryRun(model: ImageModel, params: StreamImageParams | StreamEditImageParams): void {
-  const validation = validateModelParams(model, params);
-  if (!validation.valid) {
-    throw new Error(`Parameter validation failed:\n  - ${validation.errors.join('\n  - ')}`);
+function dryRun(model: ImageModel, params: StreamImageParams | StreamEditImageParams, validate: boolean): void {
+  if (validate) {
+    const validation = validateModelParams(model, params);
+    if (!validation.valid) {
+      throw new Error(`Parameter validation failed:\n  - ${validation.errors.join('\n  - ')}`);
+    }
+    logger.info('Dry run - parameters validated successfully:');
+  } else {
+    logger.info('Dry run - validation skipped (--no-validate); parameters as they would be sent:');
   }
-  logger.info('Dry run - parameters validated successfully:');
   logger.info(JSON.stringify(params, null, 2));
 }
 
@@ -471,7 +505,7 @@ async function runRequest(job: RequestJob): Promise<void> {
     savedPaths.forEach((p: string) => logger.info(`  - ${p}`));
     logger.info(`  - ${metadataPath}`);
   } catch (error) {
-    spinner.fail(`${operation === 'edit' ? 'Edit' : 'Generation'} failed: ${getErrorMessage(error)}`);
+    spinner.fail(`${operation === 'edit' ? 'Edit' : 'Generation'} failed: ${describeError(error)}`);
     throw error;
   }
 }
@@ -490,15 +524,19 @@ program
   .option('--sunburst', 'Use gpt-image-2.5-sunburst (editing precision)')
   .option('--flare', 'Use gpt-image-2.5-flare (fast, high quality; default)')
   .option('--gpt-image-2', 'Use gpt-image-2')
-  .option('--gpt-image-15', 'Use gpt-image-1.5 (deprecated, shutdown 2026-12-01)')
-  .option('--gpt-image-1', 'Use gpt-image-1 (deprecated, shutdown 2026-10-23)')
-  .option('--gpt-image-1-mini', 'Use gpt-image-1-mini (deprecated, shutdown 2026-12-01)');
+  .option('--gpt-image-15', `Use gpt-image-1.5 (deprecated, shutdown ${MODEL_DEPRECATIONS['gpt-image-1.5']?.shutdown})`)
+  .option('--gpt-image-1', `Use gpt-image-1 (deprecated, shutdown ${MODEL_DEPRECATIONS['gpt-image-1']?.shutdown})`)
+  .option('--gpt-image-1-mini', `Use gpt-image-1-mini (deprecated, shutdown ${MODEL_DEPRECATIONS['gpt-image-1-mini']?.shutdown})`);
 
 // Operation mode
 program
   .option('--edit', 'Edit existing image(s) with prompt')
   .option('--stream', 'Stream the response, saving partial images as they arrive')
-  .option('--partial-images <n>', 'Number of partial images to stream, 0-3 (requires --stream)', parseInt);
+  .option('--partial-images <n>', 'Number of partial images to stream, 0-3 (requires --stream)', parseInt)
+  .option(
+    '--no-validate',
+    'Skip the client-side constraint check and let the API judge (for models or limits newer than this release)'
+  );
 
 // Common parameters
 program
@@ -588,13 +626,15 @@ async function main(): Promise<void> {
 
     const deprecation = getModelDeprecation(model);
     if (deprecation) {
-      logger.warn(
-        `${model} is scheduled for removal on ${deprecation.shutdown}; migrate to ${deprecation.replacement}`
-      );
+      logger.warn(deprecationNotice(model, deprecation));
     }
 
     // Initialize API
-    const api = new OpenAIImageAPI({ apiKey: options.apiKey, logLevel: options.logLevel });
+    const api = new OpenAIImageAPI({
+      apiKey: options.apiKey,
+      logLevel: options.logLevel,
+      skipValidation: !options.validate,
+    });
 
     // Determine output directory (user-provided paths are checked for traversal)
     const outputDir = options.outputDir
@@ -653,7 +693,7 @@ async function main(): Promise<void> {
           : { ...base, operation, params: { ...common, prompt } };
 
       if (options.dryRun) {
-        dryRun(model, job.params);
+        dryRun(model, job.params, options.validate);
         continue;
       }
 
@@ -683,7 +723,7 @@ async function main(): Promise<void> {
     logger.info('\n✓ All operations completed successfully!\n');
     exitAfterFlush(0);
   } catch (error) {
-    logger.error(`\n✗ Error: ${getErrorMessage(error)}\n`);
+    logger.error(`\n✗ Error: ${describeError(error)}\n`);
     exitAfterFlush(1);
   }
 }

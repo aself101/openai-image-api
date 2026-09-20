@@ -174,8 +174,22 @@ describe('Utility Functions', () => {
 
       expect(result).toContain('gpt-image-2');
       expect(result).toContain('a_cat');
-      // Timestamp format: YYYY-MM-DD_HHMMSS or YYYY-MM-DD_HH-MM-SS
-      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}_[\d-]+_gpt-image-2_a_cat\.png$/);
+      // YYYY-MM-DD_HH-MM-SS-mmm_<4 hex>_<model>_<prompt>.<ext>
+      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}_[0-9a-f]{4}_gpt-image-2_a_cat\.png$/);
+    });
+
+    it('should not collide for the same prompt in the same millisecond', () => {
+      const names = new Set(Array.from({ length: 50 }, () => generateTimestampedFilename('same', 'm')));
+      expect(names.size).toBeGreaterThan(1);
+    });
+
+    it('should keep non-Latin prompts as a stem instead of emptying them', () => {
+      expect(generateTimestampedFilename('猫がソファに座る', 'm')).toMatch(/_m_猫がソファに座る\.png$/);
+      expect(generateTimestampedFilename('Кот на диване', 'm')).toMatch(/_m_кот_на_диване\.png$/);
+    });
+
+    it('should fall back to "prompt" when nothing survives sanitizing', () => {
+      expect(generateTimestampedFilename('!!! ???', 'm')).toMatch(/_m_prompt\.png$/);
     });
 
     it('should use specified extension', () => {
@@ -208,6 +222,37 @@ describe('Utility Functions', () => {
       await decodeBase64Image(testData, filepath);
 
       expect(existsSync(filepath)).toBe(true);
+    });
+  });
+
+  describe('validateImagePath size and format limits', () => {
+    beforeEach(async () => {
+      await ensureDirectory(TEST_DIR);
+    });
+
+    it('should reject a file above the size limit without reading it whole', async () => {
+      const filepath = path.join(TEST_DIR, 'big.png');
+      const buf = Buffer.alloc(2048);
+      buf.set([0x89, 0x50, 0x4e, 0x47]);
+      await fs.writeFile(filepath, buf);
+      await expect(validateImagePath(filepath, 1024)).rejects.toThrow(/is 0\.0MB; the limit is 0\.0MB/);
+      await expect(validateImagePath(filepath, 4096)).resolves.toBe(filepath);
+    });
+
+    it('should reject GIF now that only PNG/JPEG/WebP are API inputs', async () => {
+      const filepath = path.join(TEST_DIR, 'anim.gif');
+      await fs.writeFile(filepath, Buffer.from('GIF89a' + 'x'.repeat(20)));
+      await expect(validateImagePath(filepath)).rejects.toThrow('PNG, JPEG, or WebP');
+    });
+
+    it('should accept a WebP header', async () => {
+      const filepath = path.join(TEST_DIR, 'ok.webp');
+      await fs.writeFile(filepath, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 '), Buffer.alloc(8)]));
+      await expect(validateImagePath(filepath)).resolves.toBe(filepath);
+    });
+
+    it('should name a directory as such', async () => {
+      await expect(validateImagePath(TEST_DIR)).rejects.toThrow('is a directory');
     });
   });
 
@@ -356,6 +401,17 @@ describe('Utility Functions', () => {
     it('should yield nothing for an empty or keepalive-only stream', async () => {
       expect(await collect(Readable.from([]))).toEqual([]);
       expect(await collect(Readable.from([': ping\n\n: ping\n\n']))).toEqual([]);
+    });
+
+    it('should reassemble a large payload delivered in many small chunks', async () => {
+      const big = 'B'.repeat(300_000);
+      const text = `event: e\ndata: ${big}\n\nevent: f\ndata: tail\n\n`;
+      const parts: string[] = [];
+      for (let i = 0; i < text.length; i += 4096) parts.push(text.slice(i, i + 4096));
+      const events = await collect(Readable.from(parts));
+      expect(events).toHaveLength(2);
+      expect(events[0].data).toHaveLength(300_000);
+      expect(events[1]).toEqual({ event: 'f', data: 'tail' });
     });
 
     it('should preserve large single-line payloads intact', async () => {

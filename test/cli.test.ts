@@ -103,7 +103,7 @@ describe('CLI (dist/cli.js)', () => {
   it('warns on a deprecated model', () => {
     const { code, out } = run('--dry-run', '--gpt-image-1', '--prompt', 'a cat');
     expect(code).toBe(0);
-    expect(out).toContain('scheduled for removal on 2026-10-23');
+    expect(out).toContain('is scheduled for removal from the OpenAI API on 2026-10-23');
   });
 
   it('rejects path traversal in --output-dir', () => {
@@ -126,6 +126,25 @@ describe('CLI (dist/cli.js)', () => {
     const { code, out } = run('--gpt-image-2', '--prompt', 'ok', '--prompt', 'x'.repeat(32001), '--size', '1000x1000');
     expect(code).toBe(1);
     expect(out).toContain('of 2 prompt(s) failed');
+  });
+
+  it('--no-validate lets an unknown model id through the dry-run with a warning', () => {
+    const { code, out } = run('--dry-run', '--no-validate', '--model', 'gpt-image-9-2027-01-01', '--prompt', 'a cat');
+    expect(code).toBe(0);
+    expect(out).toContain("is not in this package's catalogue; sending unvalidated");
+    expect(out).toContain('validation skipped (--no-validate)');
+    expect(out).toContain('"model": "gpt-image-9-2027-01-01"');
+  });
+
+  it('points at --no-validate when rejecting an unknown model', () => {
+    const { code, out } = run('--dry-run', '--model', 'gpt-image-9', '--prompt', 'a cat');
+    expect(code).toBe(1);
+    expect(out).toContain('pass --no-validate to send it to the API anyway');
+  });
+
+  it('--no-validate skips the per-model rules at dry-run', () => {
+    const { code } = run('--dry-run', '--no-validate', '--gpt-image-2', '--prompt', 'a cat', '--quality', 'max');
+    expect(code).toBe(0);
   });
 
   it('exposes no Sora or DALL-E flags', () => {

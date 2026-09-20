@@ -201,6 +201,9 @@ export function getOutputDir() {
 }
 /**
  * The one unknown-model message, so the API class, validator and CLI agree.
+ *
+ * @param model - The identifier that was not recognised
+ * @returns Message naming the supported set
  */
 export function unknownModelMessage(model) {
     return `Unknown model "${model}". Supported: ${Object.values(MODELS).join(', ')} (and dated snapshots)`;
@@ -218,7 +221,10 @@ export function resolveModelFamily(model) {
     return MODEL_ALIASES[model] ?? null;
 }
 /**
- * Whether a string is a model identifier this package will send.
+ * Whether a string is a model identifier in this package's catalogue.
+ *
+ * @param model - Identifier to test
+ * @returns True for canonical ids and known dated snapshots
  */
 export function isSupportedModel(model) {
     return resolveModelFamily(model) !== null;
@@ -234,7 +240,26 @@ export function getModelConstraints(model) {
     return family ? MODEL_CONSTRAINTS[family] : null;
 }
 /**
+ * Human-readable deprecation notice, tense-aware: "is scheduled for removal"
+ * before the shutdown date, "was removed" on or after it. The dates are
+ * relayed from OpenAI's deprecations page, not enforced — a request for a
+ * removed model is still sent and the API's 404 comes back.
+ *
+ * @param model - The model identifier as the caller supplied it
+ * @param deprecation - The announced shutdown
+ * @param now - Reference time (default: now); injectable for tests
+ * @returns A one-line notice naming the date and the replacement
+ */
+export function deprecationNotice(model, deprecation, now = new Date()) {
+    const shutdown = new Date(`${deprecation.shutdown}T00:00:00Z`);
+    const verb = now >= shutdown ? 'was removed from the OpenAI API on' : 'is scheduled for removal from the OpenAI API on';
+    return `Model ${model} ${verb} ${deprecation.shutdown}. Migrate to ${deprecation.replacement}.`;
+}
+/**
  * Get the announced deprecation for a model, if any.
+ *
+ * @param model - Model identifier (canonical or snapshot)
+ * @returns The announced shutdown, or null when none is announced or the model is unknown
  */
 export function getModelDeprecation(model) {
     const family = resolveModelFamily(model);
@@ -243,6 +268,8 @@ export function getModelDeprecation(model) {
 /**
  * Validate a free-form `WIDTHxHEIGHT` size against a flexible-size rule set.
  *
+ * @param size - The requested size string
+ * @param rule - The model's flexible-size constraint
  * @returns Error messages; empty when the size is acceptable
  */
 export function validateFlexibleSize(size, rule) {

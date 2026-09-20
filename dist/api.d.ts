@@ -39,7 +39,13 @@ export declare class OpenAIImageAPIError extends Error {
     readonly status?: number;
     /** `error.code` from the API body, when present */
     readonly code?: string;
-    /** `error.type` from the API body, when present */
+    /**
+     * `error.type` from the API body when the API answered; otherwise one of the
+     * package's own: `validation_error` (rejected by the client-side constraint
+     * check), `input_error` (an input file failed the pre-upload check),
+     * `configuration_error` (no API key), `stream_error` (terminal error event
+     * or early stream end). `status` is undefined for all four.
+     */
     readonly type?: string;
     /** `error.message` from the API body, when present (unsanitized) */
     readonly apiMessage?: string;
@@ -63,6 +69,7 @@ export declare class OpenAIImageAPI {
     private baseUrl;
     private rateLimitDelay;
     private requestTimeout;
+    private skipValidation;
     private lastRequestTime;
     /**
      * Serializes rate-limit waits. Without it, concurrent callers on one
@@ -81,8 +88,9 @@ export declare class OpenAIImageAPI {
      * @param options.logLevel - Logging level (DEBUG, INFO, WARNING, ERROR)
      * @param options.rateLimitDelay - Minimum milliseconds between API requests (default: 1000)
      * @param options.requestTimeout - Per-request timeout in milliseconds (default: 180000)
+     * @param options.skipValidation - Send requests without the client-side constraint check (default: false)
      */
-    constructor({ apiKey, baseUrl, logLevel, rateLimitDelay, requestTimeout, }?: APIOptions);
+    constructor({ apiKey, baseUrl, logLevel, rateLimitDelay, requestTimeout, skipValidation, }?: APIOptions);
     /**
      * Verify that API key is set.
      *
@@ -156,6 +164,13 @@ export declare class OpenAIImageAPI {
      * reference's own curl examples use that key with gpt-image-1.5.
      */
     private _buildEditForm;
+    /** Throw a client-side rejection in the package's error vocabulary */
+    private _reject;
+    /**
+     * Run the constraint check unless the caller opted out. In skip mode the
+     * request is sent as-is and the API's own answer is what the caller gets.
+     */
+    private _validate;
     /**
      * Shared pre-flight for generation requests.
      */

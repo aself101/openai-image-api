@@ -13,6 +13,7 @@ import {
   validateFlexibleSize,
   getModelConstraints,
   getModelDeprecation,
+  deprecationNotice,
   resolveModelFamily,
   isSupportedModel,
   MODELS,
@@ -157,6 +158,16 @@ describe('Configuration', () => {
       expect(getModelDeprecation('gpt-image-2')).toBeNull();
       expect(getModelDeprecation('gpt-image-2.5-flare')).toBeNull();
       expect(getModelDeprecation('gpt-image-2.5-sunburst-2026-09-08')).toBeNull();
+    });
+
+    it('should phrase the notice in the right tense around the shutdown date', () => {
+      const dep = MODEL_DEPRECATIONS['gpt-image-1']!;
+      expect(deprecationNotice('gpt-image-1', dep, new Date('2026-10-22T23:59:59Z'))).toMatch(
+        /is scheduled for removal from the OpenAI API on 2026-10-23\. Migrate to gpt-image-2\./
+      );
+      expect(deprecationNotice('gpt-image-1', dep, new Date('2026-10-23T00:00:00Z'))).toMatch(
+        /was removed from the OpenAI API on 2026-10-23/
+      );
     });
 
     it('should point every deprecated model at a live replacement', () => {

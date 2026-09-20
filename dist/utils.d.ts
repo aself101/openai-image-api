@@ -38,13 +38,19 @@ export declare function getErrorMessage(error: unknown): string;
  */
 export declare function getErrorCode(error: unknown): string | undefined;
 /**
- * Validate that file exists and is a valid image file.
+ * Validate that a file exists, is non-empty, is within a size limit, and
+ * carries the magic bytes of a format the Image API accepts (PNG, JPEG, WebP).
+ *
+ * Only the first 12 bytes are read: a 50 MB input costs one small read, not a
+ * whole-file buffer per image. GIF is not accepted — the API's documented
+ * input formats are png, webp, jpg.
  *
  * @param filepath - Path to image file
+ * @param maxSize - Maximum file size in bytes (default 50 MB, the API limit)
  * @returns The validated filepath
- * @throws Error If file doesn't exist or is not a valid image
+ * @throws Error If the file is missing, unreadable, empty, too large, or not an image
  */
-export declare function validateImagePath(filepath: string): Promise<string>;
+export declare function validateImagePath(filepath: string, maxSize?: number): Promise<string>;
 /**
  * Validate output path for path traversal attacks.
  *
@@ -137,6 +143,7 @@ export declare function parseSSEStream(stream: Readable): AsyncGenerator<RawSSEE
  *
  * @param stream - Readable to drain
  * @param maxBytes - Refuse to buffer more than this (default 1 MiB)
+ * @returns The stream's bytes decoded as UTF-8
  */
 export declare function readStreamToString(stream: Readable, maxBytes?: number): Promise<string>;
 //# sourceMappingURL=utils.d.ts.map

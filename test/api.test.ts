@@ -201,6 +201,46 @@ describe('OpenAIImageAPI', () => {
       ).rejects.toThrow('Unknown model "dall-e-3". Supported:');
     });
 
+    it('should type every client-side rejection as OpenAIImageAPIError', async () => {
+      const cases: Array<Promise<unknown>> = [
+        api.generateImage({ prompt: '' }),
+        api.generateImage({ prompt: 'x', model: 'gpt-image-2', quality: 'max' }),
+        api.generateImage({ prompt: 'x', model: 'nope' as unknown as 'gpt-image-2' }),
+        api.generateImageEdit({ image: '/nonexistent.png', prompt: 'x' }),
+        api.generateImageEdit({ image: [], prompt: 'x' }),
+      ];
+      for (const c of cases) {
+        const err = await c.catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(OpenAIImageAPIError);
+        expect((err as OpenAIImageAPIError).status).toBeUndefined();
+        expect(['validation_error', 'input_error']).toContain((err as OpenAIImageAPIError).type);
+      }
+      expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    it('should hint at skipValidation when the only failure is an unknown model', async () => {
+      await expect(
+        api.generateImage({ prompt: 'x', model: 'gpt-image-9' as unknown as 'gpt-image-2' })
+      ).rejects.toThrow('pass skipValidation: true to send it to the API anyway');
+    });
+
+    it('skipValidation should send unknown models and out-of-table params untouched', async () => {
+      const loose = new OpenAIImageAPI({ apiKey: 'sk-loose', skipValidation: true, logLevel: 'ERROR' });
+      (axios.post as Mock).mockResolvedValue(okResponse);
+      await loose.generateImage({ prompt: 'x', model: 'gpt-image-9-2027-01-01' as unknown as 'gpt-image-2', quality: 'ultra' as unknown as 'max', size: '7x7' });
+      expect((axios.post as Mock).mock.calls[0][1]).toEqual({
+        prompt: 'x',
+        model: 'gpt-image-9-2027-01-01',
+        quality: 'ultra',
+        size: '7x7',
+      });
+    });
+
+    it('skipValidation should still require a prompt and an API key', async () => {
+      const loose = new OpenAIImageAPI({ apiKey: 'sk-loose', skipValidation: true, logLevel: 'ERROR' });
+      await expect(loose.generateImage({ prompt: '' })).rejects.toThrow('Prompt is required');
+    });
+
     it('should refuse every request path when the API key is empty', async () => {
       // Reaches the guard through the public methods, not by calling the private check directly
       api.apiKey = '';
@@ -223,8 +263,8 @@ describe('OpenAIImageAPI', () => {
       await api.generateImage({ prompt: 'w', model: 'gpt-image-2.5-flare' });
 
       const messages = warn.mock.calls.map((c) => String(c[0]));
-      expect(messages.filter((m) => m.includes('gpt-image-1 is scheduled'))).toHaveLength(1);
-      expect(messages.filter((m) => m.includes('gpt-image-1.5 is scheduled'))).toHaveLength(1);
+      expect(messages.filter((m) => /Model gpt-image-1 (is scheduled|was removed)/.test(m))).toHaveLength(1);
+      expect(messages.filter((m) => /Model gpt-image-1\.5 (is scheduled|was removed)/.test(m))).toHaveLength(1);
       expect(messages.join()).toMatch(/2026-10-23/);
       expect(messages.join()).toMatch(/2026-12-01/);
       expect(messages.join()).not.toMatch(/flare/);
@@ -542,6 +582,23 @@ describe('OpenAIImageAPI', () => {
       await expect(api.generateImageStream({ prompt: 'a river' })).rejects.toThrow(
         'Bad request: size not supported'
       );
+    });
+
+    it('should reject n > 1 on streaming requests', async () => {
+      await expect(api.generateImageStream({ prompt: 'x', n: 2 })).rejects.toThrow(
+        'Streaming requests generate a single image'
+      );
+      await expect(api.generateImageEditStream({ image: '/p/a.png', prompt: 'x', n: 3 })).rejects.toThrow(
+        'Streaming requests generate a single image'
+      );
+      expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    it('should type an early stream end as a stream_error', async () => {
+      (axios.post as Mock).mockResolvedValue({ data: Readable.from([sseBody([{ event: 'image_generation.partial_image', data: partial0 }])]) });
+      const err = (await api.generateImageStream({ prompt: 'x' }).catch((e: unknown) => e)) as OpenAIImageAPIError;
+      expect(err).toBeInstanceOf(OpenAIImageAPIError);
+      expect(err.type).toBe('stream_error');
     });
 
     it('should validate partial_images before opening a stream', async () => {
