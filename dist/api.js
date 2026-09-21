@@ -147,12 +147,13 @@ export class OpenAIImageAPI {
      * @param options - Configuration options
      * @param options.apiKey - OpenAI API key. If null, reads from environment.
      * @param options.baseUrl - API base URL (default: https://api.openai.com)
-     * @param options.logLevel - Logging level (DEBUG, INFO, WARNING, ERROR)
+     * @param options.logLevel - Logging level (DEBUG, INFO, WARNING, ERROR). Default WARNING: a library
+     *   should not write progress lines to a host's stdout unasked. The CLI sets INFO explicitly.
      * @param options.rateLimitDelay - Minimum milliseconds between API requests (default: 1000)
      * @param options.requestTimeout - Per-request timeout in milliseconds (default: 180000)
      * @param options.skipValidation - Send requests without the client-side constraint check (default: false)
      */
-    constructor({ apiKey = null, baseUrl = BASE_URL, logLevel = 'INFO', rateLimitDelay = 1000, requestTimeout = DEFAULT_REQUEST_TIMEOUT, skipValidation = false, } = {}) {
+    constructor({ apiKey = null, baseUrl = BASE_URL, logLevel = 'WARNING', rateLimitDelay = 1000, requestTimeout = DEFAULT_REQUEST_TIMEOUT, skipValidation = false, } = {}) {
         // Setup logging
         this.logger = winston.createLogger({
             level: logLevel.toLowerCase(),

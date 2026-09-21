@@ -45,7 +45,11 @@ export interface APIOptions {
     apiKey?: string | null;
     /** API base URL (default: https://api.openai.com) */
     baseUrl?: string;
-    /** Logging level (default: INFO) */
+    /**
+     * Logging level (default: WARNING). Through 2.x the default was INFO, so
+     * every request wrote progress lines to the host process's stdout; a
+     * library should not do that unasked. The CLI passes INFO explicitly.
+     */
     logLevel?: LogLevel;
     /** Minimum milliseconds between API requests (default: 1000) */
     rateLimitDelay?: number;

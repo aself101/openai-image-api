@@ -1,7 +1,7 @@
 {
   "name": "openai-image-api",
   "version": "2.1.1",
-  "description": "OpenAI Image API wrapper - GPT Image 2.5 (Sunburst, Flare), GPT Image 2, and GPT Image 1.x models for Node.js with CLI and streaming",
+  "description": "Generate and edit images through the OpenAI Image API \u2014 GPT Image 2.5 (Sunburst, Flare), GPT Image 2 and 1.x \u2014 with streaming partial images, a CLI, and TypeScript types",
   "main": "dist/api.js",
   "types": "dist/api.d.ts",
   "type": "module",

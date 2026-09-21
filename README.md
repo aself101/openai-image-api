@@ -340,7 +340,7 @@ All methods live on `OpenAIImageAPI`.
 const api = new OpenAIImageAPI({
   apiKey: 'sk-...',          // default: OPENAI_API_KEY
   baseUrl: 'https://...',    // default: https://api.openai.com (HTTPS enforced)
-  logLevel: 'INFO',          // DEBUG | INFO | WARNING | ERROR
+  logLevel: 'WARNING',       // DEBUG | INFO | WARNING | ERROR — default WARNING; 2.x defaulted to INFO
   rateLimitDelay: 1000,      // ms between requests (serialized across concurrent calls)
   requestTimeout: 180000,    // ms; image generation can take minutes at high quality
   skipValidation: false,     // true: send unknown models / out-of-table params, let the API judge
@@ -658,6 +658,7 @@ Other behaviour changes:
 - **Batch exit code.** A `--prompt` batch with any failed prompt now exits 1 and lists the failures; 2.x printed the success banner and exited 0 even when every prompt failed.
 - **Rate limiting** is serialized across concurrent calls on one instance; 2.x spaced only sequential callers.
 - Errors are `OpenAIImageAPIError` instances with `status`/`code`/`type`/`apiMessage`/`cause`; messages are unchanged.
+- **Library log level defaults to `WARNING`** (was `INFO`): `new OpenAIImageAPI()` no longer writes a progress line to stdout on every request. Pass `logLevel: 'INFO'` to restore. The CLI is unchanged (`--log-level`, default INFO).
 - **Bounded buffers.** Buffered responses are capped at 256 MiB (`maxContentLength`/`maxBodyLength`) and a single SSE event at 128 MiB; both are far above any real image and exist so a hostile or broken upstream cannot exhaust memory.
 - Removed utilities: `validateImageUrl`, `downloadImage`, `imageToBase64`, `validateImageFile`, `pause` (`openai-image-api/utils`). The first three served DALL-E URL responses; the package no longer fetches anything but the API itself. `RequestOptions` and `ImageFileConstraints` types are gone with them.
 
