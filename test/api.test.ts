@@ -817,10 +817,16 @@ describe('OpenAIImageAPI', () => {
   });
 
   describe('Security Features', () => {
-    it('should enforce HTTPS for baseUrl', () => {
-      expect(() => {
+    it('should enforce HTTPS for baseUrl with a typed configuration error', () => {
+      let caught: unknown;
+      try {
         new OpenAIImageAPI({ apiKey: 'sk-test123', baseUrl: 'http://api.openai.com' });
-      }).toThrow('API base URL must use HTTPS');
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(OpenAIImageAPIError);
+      expect((caught as OpenAIImageAPIError).message).toBe('API base URL must use HTTPS protocol for security');
+      expect((caught as OpenAIImageAPIError).type).toBe('configuration_error');
     });
 
     it('should accept HTTPS baseUrl', () => {

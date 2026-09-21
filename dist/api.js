@@ -163,7 +163,9 @@ export class OpenAIImageAPI {
         });
         // Validate baseUrl uses HTTPS
         if (baseUrl && !baseUrl.startsWith('https://')) {
-            throw new Error('API base URL must use HTTPS protocol for security');
+            throw new OpenAIImageAPIError('API base URL must use HTTPS protocol for security', {
+                type: 'configuration_error',
+            });
         }
         // Set API key
         this.apiKey = apiKey || getOpenAIApiKey();

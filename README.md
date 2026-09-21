@@ -598,7 +598,7 @@ try {
 }
 ```
 
-The constructor throws a plain `Error` for a non-HTTPS `baseUrl`; that is configuration, not a request.
+The constructor throws an `OpenAIImageAPIError` with `type: 'configuration_error'` for a non-HTTPS `baseUrl`, so one `instanceof` covers construction too.
 
 | Error                                                                       | Meaning                                                                                                  |
 | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
