@@ -12,6 +12,30 @@ heading at release time.
 
 ## [Unreleased]
 
+### Added
+
+- **Cost assessment.** `openai-img cost --start <time> [--end <time>] [--project-id …] [--api-key-id …] [--json] [--output <file>]`
+  and `OpenAIAdminAPI.assessImageCosts(range, filters)` reconcile the organization
+  Images-usage endpoint (activity counts) with the Costs endpoint (amounts) per
+  UTC day and scope. Needs an admin key in `OPENAI_ADMIN_KEY`. Attribution is
+  conservative by construction: a cost row is image spend only when its
+  `quantity_unit` is `images` or its `line_item` is in a versioned exact-match
+  list; scopes join only on known, equal project + API-key ids; amounts are
+  integer micro-units per currency; every row carries its attribution level,
+  warnings, raw line items, an image breakdown and provenance. Pure algorithm at
+  `openai-image-api/cost`, paginating client at `openai-image-api/admin`,
+  `OpenAIImageAPIError` also at `openai-image-api/errors`. Spec:
+  `docs/openai-image-cost-assessment-spec.md`.
+
+### Fixed
+
+- **`logLevel: 'WARNING'` silenced every log line, errors included.** winston
+  has no `warning` level; assigning it muted the transport. The value has been
+  documented since 1.0 and became the library default in 3.0.0, so 3.0.0's
+  deprecation warnings and error logs never reached stdout. Level names are
+  now mapped (`WARNING` → `warn`) through one function and an unknown name
+  throws instead of muting. Tests assert on transport output, not on spies.
+
 ## [3.0.0] - 2026-09-21
 
 The 3.0.0 line tracks what OpenAI removed or shipped in the Image API during

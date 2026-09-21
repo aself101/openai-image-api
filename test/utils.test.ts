@@ -24,8 +24,12 @@ import {
   getErrorCode,
   assertSafeBaseFilename,
   multipartFilename,
+  toWinstonLevel,
+  logger,
+  setLogLevel,
 } from '../src/utils.js';
-import { Readable } from 'stream';
+import { Readable, Writable } from 'stream';
+import winston from 'winston';
 import type { RawSSEEvent } from '../src/types.js';
 
 const TEST_DIR = './test-output';
@@ -333,6 +337,47 @@ describe('Utility Functions', () => {
       await fs.writeFile(testFile, 'This is not an image');
 
       await expect(validateImagePath(testFile)).rejects.toThrow('does not appear to be a valid image');
+    });
+  });
+
+  describe('log levels', () => {
+    it('should map every documented level to a winston level, WARNING included', () => {
+      expect(toWinstonLevel('DEBUG')).toBe('debug');
+      expect(toWinstonLevel('info')).toBe('info');
+      expect(toWinstonLevel('WARNING')).toBe('warn');
+      expect(toWinstonLevel('warn')).toBe('warn');
+      expect(toWinstonLevel('ERROR')).toBe('error');
+      expect(() => toWinstonLevel('LOUD')).toThrow('Unknown log level "LOUD"');
+    });
+
+    it('setLogLevel(WARNING) must still emit warnings and errors to the transport', () => {
+      // Through 3.0.0 this assigned the unknown level "warning" to winston, which
+      // muted every transport. Assert on bytes written, not on a spied method.
+      // A capturing transport sees exactly what the logger's level lets through,
+      // independent of how the Console transport reaches stdout under vitest
+      const written: string[] = [];
+      const capture = new winston.transports.Stream({
+        stream: new Writable({
+          write(chunk, _enc, cb) {
+            written.push(String(chunk));
+            cb();
+          },
+        }),
+      });
+      logger.add(capture);
+      try {
+        setLogLevel('WARNING');
+        logger.warn('visible-warning-marker');
+        logger.error('visible-error-marker');
+        logger.info('hidden-info-marker');
+      } finally {
+        logger.remove(capture);
+        setLogLevel('ERROR');
+      }
+      const out = written.join('');
+      expect(out).toContain('visible-warning-marker');
+      expect(out).toContain('visible-error-marker');
+      expect(out).not.toContain('hidden-info-marker');
     });
   });
 

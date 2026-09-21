@@ -30,7 +30,35 @@ const logger = winston.createLogger({
  * @param level - Log level (DEBUG, INFO, WARNING, ERROR)
  */
 export function setLogLevel(level) {
-    logger.level = level.toLowerCase();
+    logger.level = toWinstonLevel(level);
+}
+/**
+ * Map this package's LogLevel names to winston's npm levels.
+ *
+ * winston has `warn`, not `warning`. Assigning an unknown level name to a
+ * winston logger does not fall back — it silences every transport, errors
+ * included. Through 3.0.0 `logLevel: 'WARNING'` (the documented value, and
+ * the library default since 3.0.0) did exactly that. Every logger in this
+ * package must go through this function.
+ *
+ * @param level - DEBUG | INFO | WARNING | WARN | ERROR, any case
+ * @returns The winston level string
+ * @throws Error For a name that is none of those, rather than silently muting
+ */
+export function toWinstonLevel(level) {
+    switch (level.toUpperCase()) {
+        case 'DEBUG':
+            return 'debug';
+        case 'INFO':
+            return 'info';
+        case 'WARNING':
+        case 'WARN':
+            return 'warn';
+        case 'ERROR':
+            return 'error';
+        default:
+            throw new Error(`Unknown log level "${level}". Valid options: DEBUG, INFO, WARNING, ERROR`);
+    }
 }
 /** Module-level logger shared by the CLI and utilities; level set via setLogLevel */
 export { logger };

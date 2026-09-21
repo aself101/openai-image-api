@@ -66,6 +66,7 @@ await api.saveImages(streamed, './out', 'river');
 - [API Methods](#api-methods)
 - [Streaming](#streaming)
 - [Examples](#examples)
+- [Cost Assessment](#cost-assessment)
 - [Data Organization](#data-organization)
 - [Testing](#testing)
 - [Error Handling](#error-handling)
@@ -256,6 +257,10 @@ openai-image-api/
 │   ├── config.ts           # Model constraints, deprecations, validation
 │   ├── utils.ts            # File I/O, image header checks, SSE parser
 │   ├── cli-core.ts         # CLI logic (testable in-process)
+│   ├── cost.ts             # Cost assessment algorithm (pure)
+│   ├── admin-api.ts        # OpenAIAdminAPI: paginated usage / costs client
+│   ├── cost-cli.ts         # `openai-img cost` subcommand
+│   ├── errors.ts           # OpenAIImageAPIError
 │   ├── cli.ts              # CLI bin entry (argv / exit wiring)
 │   └── types.ts            # Type definitions
 ├── scripts/check-reference.mjs  # Diff config against OpenAI's published reference
@@ -498,6 +503,37 @@ const [path] = await api.saveImages(edited, './out', 'autumn');
 console.log(path, edited.usage);
 ```
 
+## Cost Assessment
+
+`openai-img cost` reconciles your organization's **image usage** (`GET /v1/organization/usage/images`, activity counts) with its **costs** (`GET /v1/organization/costs`, dollar amounts) per UTC day and per scope. It needs an **admin key** (`sk-admin-…`, Organization → Admin keys) in `OPENAI_ADMIN_KEY` — a different credential from the project key the image commands use.
+
+```bash
+export OPENAI_ADMIN_KEY="sk-admin-..."
+openai-img cost --start 7d                           # last seven UTC days to now
+openai-img cost --start 2026-09-01 --end 2026-09-08  # end is exclusive
+openai-img cost --start 30d --project-id proj_abc --json --output costs.json
+```
+
+```typescript
+import { OpenAIAdminAPI } from 'openai-image-api';
+
+const admin = new OpenAIAdminAPI(); // reads OPENAI_ADMIN_KEY
+const report = await admin.assessImageCosts({ start_time, end_time }, { project_ids: ['proj_abc'] });
+for (const row of report.rows) {
+  console.log(row.period_start_iso, row.scope, row.image_count, row.classified_image_cost, row.attribution_level);
+}
+```
+
+**What it is, and is not.** This is a reconciliation report, not request-level billing. The two endpoints share no request id, and Costs cannot be grouped by model, so:
+
+- A cost row counts as **image spend** only on a documented signal — its `quantity_unit` is `images`, or its `line_item` is in the package's versioned exact-match list (empty until real values are observed; `observed_line_items` in the output shows what your org's rows actually say). Everything else is **unclassified** and stays visible. Cost that merely lands on the same day as image activity is _not_ attributed to it.
+- Scopes join only where both endpoints carry the same **known** project and API-key ids. A row with `null` project/key is organization scope; it is never copied onto projects.
+- `average_cost_per_image` is computed only at an exact project + API-key scope with image-classified cost and image activity on both sides. It is a blended figure for that scope and day, not a per-model price.
+- Amounts are summed as integer micro-units per currency — no floating-point drift, currencies never mixed.
+- Every row carries `attribution_level` (`exact_scope_reconciliation` → `image_line_item_reconciliation` → `shared_scope_estimate` → `unattributed`), `warnings`, the raw `line_items`, an `image_breakdown` by model/size/source/user, and `provenance` back to the source pages.
+
+The pure algorithm is `assessImageCosts(imagePages, costPages, range)` from `openai-image-api/cost`; the paginating client is `OpenAIAdminAPI` from `openai-image-api/admin` (also re-exported from the main entry). Both endpoints are fetched to the last page before anything is computed; a partial page set is refused. Spec: `docs/openai-image-cost-assessment-spec.md`.
+
 ## Data Organization
 
 Generated images and metadata are organized by model:
@@ -571,6 +607,8 @@ The suite has 247 tests across five files:
 - **api** — request payloads per model family, default model, deprecation warning once per model, streaming (SSE reassembly across chunk boundaries, event ordering, callback wrapper, error-body recovery from a failed stream, terminal error events), edit pre-flight, `saveImages`, security (HTTPS enforcement, key redaction, production error sanitisation, rate limiting).
 - **utils** — file I/O, filename generation, image magic-byte validation, path traversal, error-message extraction, SSE parser edge cases (CRLF, multi-line data, comments, trailing event, 200 kB payloads).
 - **cli-core** — in-process tests of the CLI logic (`src/cli-core.ts`): option parsing and enum checks, model resolution, cross-flag validation, job construction, `runCli` exit codes for dry runs and batch failures.
+- **cost** — money arithmetic, classification, normalization, the spec's worked example, scope joins (known never matches unknown), cost-only / image-only buckets, double-count guard, currency isolation, admin-client pagination and auth errors.
+- **cost-cli** — time parsing, text rendering, routed failure paths, `--json` / `--output`.
 - **cli** — subprocess smoke tests against the built `dist/cli.js`: `--dry-run` validation failures exit non-zero with the validator's message, `--model` rejects removed ids, invalid enum flags are refused before any request.
 
 Network calls are mocked. Live verification of streaming, editing, and the `input_fidelity` behaviour was performed against the real API on 2026-09-20 and again from the published 3.0.0 tarball on 2026-09-21; it is not part of `npm test`.
@@ -580,7 +618,7 @@ Network calls are mocked. Live verification of streaming, editing, and the `inpu
 Every failure thrown by `OpenAIImageAPI` methods is an `OpenAIImageAPIError` (exported from the main entry) — API responses, client-side rejections, input-file checks, and stream failures alike. The `message` is the stable human-readable vocabulary below; the fields let you branch without parsing it:
 
 ```typescript
-import { OpenAIImageAPI, OpenAIImageAPIError } from 'openai-image-api';
+import { OpenAIImageAPI, OpenAIImageAPIError } from 'openai-image-api'; // also: openai-image-api/errors
 
 try {
   await api.generateImage({ prompt });
@@ -639,6 +677,10 @@ You're editing with gpt-image-2 or a 2.5 model. Drop `--input-fidelity`; these m
 ### The API accepts something this package rejects
 
 The constraint tables date from 2026-09-20. Pass `--no-validate` / `skipValidation: true` and file an issue with the API's response so the table can be updated.
+
+### `openai-img cost` says Authentication failed
+
+The usage endpoints take an **admin** key (`sk-admin-…`), not a project key. Create one under Organization → Admin keys and set `OPENAI_ADMIN_KEY`.
 
 ### Requests time out
 

@@ -21,6 +21,7 @@
 import { Command } from 'commander';
 import path from 'path';
 import { OpenAIImageAPI, OpenAIImageAPIError } from './api.js';
+import { runCostCli } from './cost-cli.js';
 import {
   generateTimestampedFilename,
   writeToFile,
@@ -494,7 +495,12 @@ export async function runRequest(job: RequestJob): Promise<void> {
  */
 export function buildProgram(version: string): Command {
   const program = new Command();
-  program.name('openai-img').description('OpenAI Image Generation CLI - GPT Image models').version(version);
+  program
+    .name('openai-img')
+    .description(
+      'OpenAI Image Generation CLI - GPT Image models. Subcommand `openai-img cost --help`: reconcile organization image usage with costs (admin key).'
+    )
+    .version(version);
 
   // Model selection
   program
@@ -573,6 +579,9 @@ export function buildProgram(version: string): Command {
  * @returns Exit code: 0 on success, 1 on any failure
  */
 export async function runCli(argv: string[], version: string): Promise<number> {
+  // Subcommands route before the generation parser sees the flags
+  if (argv[2] === 'cost') return runCostCli(argv, version);
+
   const program = buildProgram(version);
   program.parse(argv);
 

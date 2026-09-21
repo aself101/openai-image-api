@@ -64,3 +64,4 @@ build/
 # Agent worktrees and local test output
 .claude/worktrees/
 test-cli-core-out/
+test-cost-out/

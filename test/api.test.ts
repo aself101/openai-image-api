@@ -7,7 +7,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import axios from 'axios';
-import { Readable } from 'stream';
+import { Readable, Writable } from 'stream';
+import winston from 'winston';
 import { OpenAIImageAPI, OpenAIImageAPIError } from '../src/api.js';
 import type { ImageGenerationStreamEvent } from '../src/types.js';
 
@@ -263,6 +264,31 @@ describe('OpenAIImageAPI', () => {
       await expect(api.generateImageStream({ prompt: 'a cat' })).rejects.toThrow('API key not set');
       await expect(api.generateImageEditStream({ image: '/p/a.png', prompt: 'x' })).rejects.toThrow('API key not set');
       expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    it('should print the deprecation warning at the default log level (WARNING)', async () => {
+      (axios.post as Mock).mockResolvedValue(okResponse);
+      const defaultApi = new OpenAIImageAPI({ apiKey: 'sk-default-level' });
+      // A capturing transport sees exactly what the logger's level lets through,
+      // independent of how the Console transport reaches stdout under vitest
+      const written: string[] = [];
+      const capture = new winston.transports.Stream({
+        stream: new Writable({
+          write(chunk, _enc, cb) {
+            written.push(String(chunk));
+            cb();
+          },
+        }),
+      });
+      const log = priv(defaultApi).logger as unknown as winston.Logger;
+      log.add(capture);
+      try {
+        await defaultApi.generateImage({ prompt: 'x', model: 'gpt-image-1' });
+      } finally {
+        log.remove(capture);
+      }
+      expect(written.join('')).toMatch(/WARN - Model gpt-image-1 (is scheduled|was removed)/);
+      expect(written.join('')).not.toMatch(/INFO - Generating image/);
     });
 
     it('should warn once per deprecated model', async () => {

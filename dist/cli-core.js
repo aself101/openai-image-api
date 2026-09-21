@@ -20,6 +20,7 @@
 import { Command } from 'commander';
 import path from 'path';
 import { OpenAIImageAPI, OpenAIImageAPIError } from './api.js';
+import { runCostCli } from './cost-cli.js';
 import { generateTimestampedFilename, writeToFile, ensureDirectory, setLogLevel, createSpinner, logger, decodeBase64Image, validateOutputPath, getErrorMessage, } from './utils.js';
 import { getOutputDir, getModelConstraints, getModelDeprecation, isSupportedModel, unknownModelMessage, deprecationNotice, MODELS, MODEL_DEPRECATIONS, DEFAULT_MODEL, } from './config.js';
 /**
@@ -377,7 +378,10 @@ export async function runRequest(job) {
  */
 export function buildProgram(version) {
     const program = new Command();
-    program.name('openai-img').description('OpenAI Image Generation CLI - GPT Image models').version(version);
+    program
+        .name('openai-img')
+        .description('OpenAI Image Generation CLI - GPT Image models. Subcommand `openai-img cost --help`: reconcile organization image usage with costs (admin key).')
+        .version(version);
     // Model selection
     program
         .option('--model <id>', 'Model identifier (canonical or dated snapshot); overrides shortcut flags')
@@ -429,6 +433,9 @@ export function buildProgram(version) {
  * @returns Exit code: 0 on success, 1 on any failure
  */
 export async function runCli(argv, version) {
+    // Subcommands route before the generation parser sees the flags
+    if (argv[2] === 'cost')
+        return runCostCli(argv, version);
     const program = buildProgram(version);
     program.parse(argv);
     let options;

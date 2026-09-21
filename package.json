@@ -1,7 +1,7 @@
 {
   "name": "openai-image-api",
   "version": "3.0.0",
-  "description": "Generate and edit images through the OpenAI Image API — GPT Image 2.5 (Sunburst, Flare), GPT Image 2 and 1.x — with streaming partial images, a CLI, and TypeScript types",
+  "description": "Generate and edit images through the OpenAI Image API \u2014 GPT Image 2.5 (Sunburst, Flare), GPT Image 2 and 1.x \u2014 with streaming partial images, an organization image-cost assessment, a CLI, and TypeScript types",
   "main": "dist/api.js",
   "types": "dist/api.d.ts",
   "type": "module",
@@ -28,6 +28,18 @@
     "./types": {
       "types": "./dist/types.d.ts",
       "import": "./dist/types.js"
+    },
+    "./cost": {
+      "types": "./dist/cost.d.ts",
+      "import": "./dist/cost.js"
+    },
+    "./admin": {
+      "types": "./dist/admin-api.d.ts",
+      "import": "./dist/admin-api.js"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "import": "./dist/errors.js"
     }
   },
   "files": [
@@ -72,7 +84,10 @@
     "streaming",
     "partial-images",
     "cli",
-    "typescript"
+    "typescript",
+    "cost-assessment",
+    "usage-api",
+    "admin-api"
   ],
   "author": "img-gen Contributors",
   "license": "MIT",
