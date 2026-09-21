@@ -1,7 +1,7 @@
 {
   "name": "openai-image-api",
-  "version": "3.0.0",
-  "description": "Generate and edit images through the OpenAI Image API \u2014 GPT Image 2.5 (Sunburst, Flare), GPT Image 2 and 1.x \u2014 with streaming partial images, an organization image-cost assessment, a CLI, and TypeScript types",
+  "version": "3.1.0",
+  "description": "Generate and edit images through the OpenAI Image API — GPT Image 2.5 (Sunburst, Flare), GPT Image 2 and 1.x — with streaming partial images, an organization image-cost assessment, a CLI, and TypeScript types",
   "main": "dist/api.js",
   "types": "dist/api.d.ts",
   "type": "module",

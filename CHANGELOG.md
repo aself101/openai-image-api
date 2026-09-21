@@ -12,6 +12,8 @@ heading at release time.
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-09-21
+
 ### Added
 
 - **Cost assessment.** `openai-img cost --start <time> [--end <time>] [--project-id …]
@@ -326,5 +328,6 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - Organization verification requirements for GPT Image 1
 
 [1.0.0]: https://github.com/aself101/openai-image-api/releases/tag/v1.0.0
-[Unreleased]: https://github.com/aself101/openai-image-api/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/aself101/openai-image-api/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/aself101/openai-image-api/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/aself101/openai-image-api/compare/v2.1.1...v3.0.0
