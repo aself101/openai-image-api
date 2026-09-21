@@ -8,6 +8,27 @@ import { parseTime, resolveRange, renderAssessment, runCostCli } from '../src/co
 import { runCli } from '../src/cli-core.js';
 import { assessImageCosts, type UsagePage, type CompletionsUsageResult, type CostsResult } from '../src/cost.js';
 import { logger, setLogLevel } from '../src/utils.js';
+import winston from 'winston';
+import { Writable } from 'stream';
+
+/**
+ * Capture what the logger's transports receive. Failure paths assert on these
+ * bytes rather than on a spied `logger.error`: a spy is satisfied by a call the
+ * transport never emits, which is how the muted WARNING level survived 3.0.0.
+ */
+function captureLog(): { written: string[]; release: () => void } {
+  const written: string[] = [];
+  const capture = new winston.transports.Stream({
+    stream: new Writable({
+      write(chunk, _enc, cb) {
+        written.push(String(chunk));
+        cb();
+      },
+    }),
+  });
+  logger.add(capture);
+  return { written, release: () => logger.remove(capture) };
+}
 
 vi.mock('axios');
 
@@ -158,22 +179,34 @@ describe('runCostCli', () => {
   });
 
   it('is reachable through the main runCli router', async () => {
-    const error = vi.spyOn(logger, 'error').mockImplementation(() => logger);
-    expect(await runCli(argv('--start', 'banana'), '3.1.0')).toBe(1);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('--start: "banana"'));
+    const log = captureLog();
+    try {
+      expect(await runCli(argv('--start', 'banana'), '3.1.0')).toBe(1);
+    } finally {
+      log.release();
+    }
+    expect(log.written.join('')).toContain('--start: "banana"');
   });
 
   it('fails clearly without an admin key', async () => {
     delete process.env.OPENAI_ADMIN_KEY;
-    const error = vi.spyOn(logger, 'error').mockImplementation(() => logger);
-    expect(await runCostCli(argv('--start', '7d'), '3.1.0')).toBe(1);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('OPENAI_ADMIN_KEY not found'));
+    const log = captureLog();
+    try {
+      expect(await runCostCli(argv('--start', '7d'), '3.1.0')).toBe(1);
+    } finally {
+      log.release();
+    }
+    expect(log.written.join('')).toContain('OPENAI_ADMIN_KEY not found');
   });
 
   it('rejects an end before start', async () => {
-    const error = vi.spyOn(logger, 'error').mockImplementation(() => logger);
-    expect(await runCostCli(argv('--start', '2024-11-02', '--end', '2024-11-01'), '3.1.0')).toBe(1);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('--end must be after --start'));
+    const log = captureLog();
+    try {
+      expect(await runCostCli(argv('--start', '2024-11-02', '--end', '2024-11-01'), '3.1.0')).toBe(1);
+    } finally {
+      log.release();
+    }
+    expect(log.written.join('')).toContain('--end must be after --start');
   });
 
   it('prints JSON with --json and writes --output', async () => {

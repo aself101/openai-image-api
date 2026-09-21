@@ -59,8 +59,9 @@ heading at release time.
   documented since 1.0 and became the library default in 3.0.0, so 3.0.0's
   deprecation warnings and error logs never reached stdout. Level names are
   now mapped (`WARNING` → `warn`) through one function and an unknown name
-  throws instead of muting. Tests assert on what the transport receives, so a
-  muted level fails them.
+  throws instead of muting. The log-level tests and the cost CLI's failure-path
+  tests assert on what the transport receives, not on a spied method, so a
+  muted level fails them (mutation-checked).
 
 ### Removed
 
