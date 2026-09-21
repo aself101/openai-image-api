@@ -378,7 +378,7 @@ const result = await api.generateImageEdit({
 });
 ```
 
-Images are sent as multipart `image[]` parts; the mask as `mask`. Every input file is checked for existence and image magic bytes (PNG/JPEG/WebP/GIF) before the upload starts.
+Images are sent as multipart `image[]` parts; the mask as `mask`. Every input file is checked for existence, size (≤ 50 MB) and image magic bytes (PNG/JPEG/WebP) before the upload starts. The check and the upload open the file separately; if you forward end-user-controlled paths from a server, re-validate them yourself immediately before the call and do not point them at paths another user can swap.
 
 ### `streamImage(params): AsyncGenerator<ImageGenerationStreamEvent>`
 

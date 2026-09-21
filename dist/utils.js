@@ -211,8 +211,14 @@ export async function writeToFile(data, filepath, fileFormat = 'auto') {
 /**
  * Decode base64 image data and save to file.
  *
+ * This is the low-level write primitive: `filepath` is written exactly as
+ * given, parent directories created as needed, with NO traversal check. It is
+ * the caller's job to validate the path (see validateOutputPath and
+ * assertSafeBaseFilename) before passing anything derived from untrusted input
+ * here; `saveImages()` does that for you.
+ *
  * @param b64Data - Base64 encoded image data
- * @param filepath - Destination file path
+ * @param filepath - Destination file path, already validated by the caller
  * @returns The filepath where image was saved
  */
 export async function decodeBase64Image(b64Data, filepath) {

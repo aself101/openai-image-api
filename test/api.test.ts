@@ -205,15 +205,16 @@ describe('OpenAIImageAPI', () => {
     });
 
     it('should type every client-side rejection as OpenAIImageAPIError', async () => {
-      const cases: Array<Promise<unknown>> = [
-        api.generateImage({ prompt: '' }),
-        api.generateImage({ prompt: 'x', model: 'gpt-image-2', quality: 'max' }),
-        api.generateImage({ prompt: 'x', model: 'nope' as unknown as 'gpt-image-2' }),
-        api.generateImageEdit({ image: '/nonexistent.png', prompt: 'x' }),
-        api.generateImageEdit({ image: [], prompt: 'x' }),
+      // Each call is a thunk so no rejection exists before it is awaited
+      const cases: Array<() => Promise<unknown>> = [
+        () => api.generateImage({ prompt: '' }),
+        () => api.generateImage({ prompt: 'x', model: 'gpt-image-2', quality: 'max' }),
+        () => api.generateImage({ prompt: 'x', model: 'nope' as unknown as 'gpt-image-2' }),
+        () => api.generateImageEdit({ image: '/nonexistent.png', prompt: 'x' }),
+        () => api.generateImageEdit({ image: [], prompt: 'x' }),
       ];
       for (const c of cases) {
-        const err = await c.catch((e: unknown) => e);
+        const err = await c().catch((e: unknown) => e);
         expect(err).toBeInstanceOf(OpenAIImageAPIError);
         expect((err as OpenAIImageAPIError).status).toBeUndefined();
         expect(['validation_error', 'input_error']).toContain((err as OpenAIImageAPIError).type);
