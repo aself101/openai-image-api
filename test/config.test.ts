@@ -9,6 +9,7 @@ import {
   getOpenAIApiKey,
   validateApiKeyFormat,
   getOutputDir,
+  loadEnvConfig,
   validateModelParams,
   validateFlexibleSize,
   getModelConstraints,
@@ -30,6 +31,8 @@ describe('Configuration', () => {
   beforeEach(() => {
     // Save original environment
     originalEnv = { ...process.env };
+    // Keep the lazy .env loader from reading this machine's real key files
+    process.env.OPENAI_IMAGE_API_NO_DOTENV = '1';
   });
 
   afterEach(() => {
@@ -51,6 +54,18 @@ describe('Configuration', () => {
     it('should throw error when no API key found', () => {
       delete process.env.OPENAI_API_KEY;
       expect(() => getOpenAIApiKey()).toThrow('OPENAI_API_KEY not found');
+    });
+
+    it('should not read .env files when OPENAI_IMAGE_API_NO_DOTENV is set', () => {
+      delete process.env.OPENAI_API_KEY;
+      expect(loadEnvConfig()).toBe(false);
+      expect(() => getOpenAIApiKey()).toThrow('OPENAI_API_KEY not found');
+    });
+
+    it('should not touch .env files when a CLI key is given', () => {
+      delete process.env.OPENAI_IMAGE_API_NO_DOTENV;
+      // With a CLI key the loader must not run at all; an opt-out is not needed
+      expect(getOpenAIApiKey('cli-key')).toBe('cli-key');
     });
 
     it('should not mention removed models in the help text', () => {

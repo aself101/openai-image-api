@@ -56,8 +56,9 @@ describe('OpenAIImageAPI', () => {
     // Save original environment
     originalEnv = { ...process.env };
 
-    // Set test API key
+    // Set test API key; keep the lazy .env loader away from real key files
     process.env.OPENAI_API_KEY = 'sk-test-key-123';
+    process.env.OPENAI_IMAGE_API_NO_DOTENV = '1';
 
     // Create API instance
     api = new OpenAIImageAPI({ logLevel: 'ERROR' }) as OpenAIImageAPI & TestableAPI;
@@ -115,6 +116,8 @@ describe('OpenAIImageAPI', () => {
             'Content-Type': 'application/json',
           }),
           timeout: 180000,
+          maxContentLength: 256 * 1024 * 1024,
+          maxBodyLength: 256 * 1024 * 1024,
         })
       );
       expect(result).toEqual(okResponse.data);
@@ -379,6 +382,7 @@ describe('OpenAIImageAPI', () => {
         const parts = (form as unknown as { _streams: unknown[] })._streams;
         const body = parts.filter((x): x is string => typeof x === 'string').join('');
         expect(body.match(/name="image\[\]"/g)).toHaveLength(2);
+        expect(body).toMatch(/filename="real\.png"/);
         expect(body).toMatch(/name="model"\r\n\r\ngpt-image-2.5-sunburst/);
         expect(body).toMatch(/name="quality"\r\n\r\nhigh/);
         expect(body).not.toMatch(/name="response_format"/);
@@ -725,6 +729,28 @@ describe('OpenAIImageAPI', () => {
       expect(paths[0]).toContain('batch_1.png');
       expect(paths[1]).toContain('batch_2.png');
       expect(paths[2]).toContain('batch_3.png');
+    });
+
+    it('should refuse a baseFilename that is not a single path component', async () => {
+      const resp = { created: 1, data: [{ b64_json: Buffer.from('x').toString('base64') }] };
+      for (const bad of ['../escape', 'a/b', 'a\\b', '..', '.', '']) {
+        await expect(api.saveImages(resp, API_TEST_DIR, bad)).rejects.toThrow('single path component');
+      }
+    });
+
+    it('should refuse an outputDir with a .. segment', async () => {
+      const resp = { created: 1, data: [{ b64_json: Buffer.from('x').toString('base64') }] };
+      await expect(api.saveImages(resp, `${API_TEST_DIR}/../etc`, 'x')).rejects.toThrow('Path traversal');
+    });
+
+    it('should strip anything but alphanumerics from the extension', async () => {
+      const paths = await api.saveImages(
+        { created: 1, data: [{ b64_json: Buffer.from('x').toString('base64') }] },
+        API_TEST_DIR,
+        'ext',
+        '../png'
+      );
+      expect(paths[0]).toMatch(/ext\.png$/);
     });
 
     it('should default the extension to the response output_format', async () => {

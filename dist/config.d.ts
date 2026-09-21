@@ -21,6 +21,19 @@
  * comment says so; do not tighten a constraint the API does not publish.
  */
 import type { ImageModel, ImageModelFamily, ImageModelConstraints, ImageModelConstraintsMap, ModelDeprecation, ValidationResult, GenerateImageParams, EditImageParams, StreamParams, FlexibleSizeConstraint } from './types.js';
+/**
+ * Load `.env` files into process.env: the current directory's `.env`, then
+ * `~/.openai/.env`. Neither overrides a variable that is already set.
+ *
+ * Through 2.x this ran unconditionally at import time, so any server that
+ * imported the SDK had its process.env probed from whatever `.env` sat in its
+ * cwd. It now runs only when a key is actually being looked up (see
+ * getOpenAIApiKey) and never when `OPENAI_IMAGE_API_NO_DOTENV` is set — an SDK
+ * consumer that manages its own configuration can opt out entirely. Idempotent.
+ *
+ * @returns True if the load ran (or had already run), false if opted out
+ */
+export declare function loadEnvConfig(): boolean;
 /** OpenAI API base URL; override per instance via APIOptions.baseUrl (HTTPS only) */
 export declare const BASE_URL: string;
 /** Image API endpoint paths, relative to BASE_URL */

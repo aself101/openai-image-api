@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/openai-image-api.svg)](https://www.npmjs.com/package/openai-image-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/openai-image-api)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-205%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-214%20passing-brightgreen)](test/)
 
 A Node.js wrapper for the [OpenAI Image API](https://developers.openai.com/api/reference/resources/images) — `/v1/images/generations` and `/v1/images/edits` — for the GPT Image model family: **GPT Image 2.5** (Sunburst, Flare), **GPT Image 2**, and the deprecated GPT Image 1.x models. Generate and edit images, with streaming partial-image delivery, via CLI or programmatic API.
 
@@ -128,6 +128,8 @@ You can provide your API key in multiple ways (listed in priority order):
 openai-img --api-key YOUR_API_KEY --prompt "a cat"
 ```
 
+On a shared host the flag is visible to other users through the process list for the life of the run; the CLI prints a warning. Prefer Option B or D there.
+
 #### Option B: Environment Variable
 
 ```bash
@@ -156,6 +158,8 @@ echo "OPENAI_API_KEY=your_actual_api_key_here" > ~/.openai/.env
 ```
 
 **Security Note:** Never commit `.env` files or expose your API key publicly.
+
+**Library consumers:** `.env` files are read only when a key is actually being looked up (no `apiKey` passed and `OPENAI_API_KEY` unset) — not at import time as in 2.x — and never when `OPENAI_IMAGE_API_NO_DOTENV` is set. A server that manages its own configuration can set that variable and the SDK will not touch the filesystem for credentials.
 
 ### 3. Organization Verification
 
@@ -392,6 +396,8 @@ Edit counterparts; events are `image_edit.partial_image` / `image_edit.completed
 
 Decodes each `b64_json` entry to `<outputDir>/<baseFilename>.<format>` (numbered `_1`, `_2`… when `n > 1`). `format` defaults to `response.output_format`, then `png`.
 
+Path inputs are checked before writing: `outputDir` may not contain a `..` segment and `baseFilename` must be a single path component (no `/`, `\`, `..`). A server forwarding end-user input here cannot be steered outside `outputDir`; to write elsewhere, validate your own path and call `decodeBase64Image` directly.
+
 ## Streaming
 
 Streaming uses `stream: true` on the same endpoints; the API answers with Server-Sent Events. This package parses them and exposes both an async generator and a callback wrapper.
@@ -502,7 +508,9 @@ datasets/
         └── ...
 ```
 
-Partial frames, the final image, and the metadata sidecar for one request share a stem — `YYYY-MM-DD_HH-MM-SS-mmm_<4 hex>_<model>_<prompt>` — so they sort together and two processes rendering the same prompt in the same millisecond do not overwrite each other. Prompt text keeps letters and digits in any script (a Japanese prompt keeps its characters); everything else becomes `_`. `saveImages()` applies no sanitizing to the `baseFilename` you pass — that is the caller's string.
+Partial frames, the final image, and the metadata sidecar for one request share a stem — `YYYY-MM-DD_HH-MM-SS-mmm_<4 hex>_<model>_<prompt>` — so they sort together and two processes rendering the same prompt in the same millisecond do not overwrite each other. Prompt text keeps letters and digits in any script (a Japanese prompt keeps its characters); everything else becomes `_`; Windows-reserved stems (`con`, `nul`, `com1`…) get a trailing `_`. `saveImages()` does not sanitize the `baseFilename` you pass beyond requiring it to be a single path component.
+
+The metadata sidecar stores the prompt and any `--user` id in plaintext. Sharing or backing up an output directory shares the prompts.
 
 **Metadata Format:**
 
@@ -546,7 +554,7 @@ npm run test:ui
 npm run test:coverage
 ```
 
-The suite has 205 tests across four files:
+The suite has 214 tests across four files:
 
 - **config** — model catalogue and deprecation table, flexible-size rules (multiples of 16, aspect ratio, pixel bounds), per-model quality gating, `input_fidelity` rejection, cross-field rules (transparent+jpeg, compression without jpeg/webp), snapshot resolution.
 - **api** — request payloads per model family, default model, deprecation warning once per model, streaming (SSE reassembly across chunk boundaries, event ordering, callback wrapper, error-body recovery from a failed stream, terminal error events), edit pre-flight, `saveImages`, security (HTTPS enforcement, key redaction, production error sanitisation, rate limiting).
@@ -570,7 +578,9 @@ try {
     err.code;        // API error.code — the stable discriminator
     err.type;        // API error.type (e.g. 'image_generation_user_error': fix the input, do not retry unchanged)
                      // or the package's own: 'validation_error' | 'input_error' | 'configuration_error' | 'stream_error'
-    err.apiMessage;  // the API's own message, even when NODE_ENV=production sanitizes err.message
+    err.apiMessage;  // the API's own message — deliberately exempt from NODE_ENV=production sanitization
+                     // (it is addressed to the key holder and names the rejected parameter or policy, not
+                     // internals); do not forward it to end users unreviewed
     err.cause;       // the original axios error (or the underlying fs error for input_error)
   }
 }
@@ -648,6 +658,7 @@ Other behaviour changes:
 - **Batch exit code.** A `--prompt` batch with any failed prompt now exits 1 and lists the failures; 2.x printed the success banner and exited 0 even when every prompt failed.
 - **Rate limiting** is serialized across concurrent calls on one instance; 2.x spaced only sequential callers.
 - Errors are `OpenAIImageAPIError` instances with `status`/`code`/`type`/`apiMessage`/`cause`; messages are unchanged.
+- **Bounded buffers.** Buffered responses are capped at 256 MiB (`maxContentLength`/`maxBodyLength`) and a single SSE event at 128 MiB; both are far above any real image and exist so a hostile or broken upstream cannot exhaust memory.
 - Removed utilities: `validateImageUrl`, `downloadImage`, `imageToBase64`, `validateImageFile`, `pause` (`openai-image-api/utils`). The first three served DALL-E URL responses; the package no longer fetches anything but the API itself. `RequestOptions` and `ImageFileConstraints` types are gone with them.
 
 ## Additional Resources

@@ -266,12 +266,46 @@ export async function decodeBase64Image(b64Data: string, filepath: string): Prom
 export function sanitizeForFilename(text: string, maxLength: number = 50): string {
   // Letters and digits in any script are kept, so a Japanese or Cyrillic prompt
   // does not collapse to an empty stem; everything else becomes one underscore.
-  return text
+  const stem = text
     .normalize('NFKC')
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, '_')
     .replace(/^_+|_+$/g, '')
     .substring(0, maxLength);
+  // Windows refuses these as file stems regardless of extension
+  return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem) ? `${stem}_` : stem;
+}
+
+/**
+ * Assert that a caller-supplied base filename is a single path component.
+ *
+ * `saveImages()` joins this with the output directory; a value carrying a
+ * separator or `..` would let a server that forwards end-user input into the
+ * SDK write outside the directory it chose. Rejected rather than sanitized so
+ * the caller learns about it.
+ *
+ * @param name - Proposed base filename (without extension)
+ * @returns The same name
+ * @throws Error If the name is empty, contains a path separator, or is `.`/`..`
+ */
+export function assertSafeBaseFilename(name: string): string {
+  if (!name || name === '.' || name === '..' || /[\\/\0]/.test(name)) {
+    throw new Error(`baseFilename must be a single path component, got "${name}"`);
+  }
+  return name;
+}
+
+/**
+ * Multipart part filename derived from a path: the basename with CR, LF and
+ * double quotes replaced, so a hostile path cannot inject header lines into
+ * the multipart body regardless of the form-data version in use.
+ *
+ * @param filePath - Path of the file being uploaded
+ * @returns A header-safe filename
+ */
+export function multipartFilename(filePath: string): string {
+  const base = path.basename(filePath).replace(/[\r\n"]/g, '_');
+  return base || 'image';
 }
 
 /**
@@ -391,12 +425,23 @@ export function createSpinner(message: string = 'Processing'): Spinner {
  *
  * Image payloads are large (a `max`-quality PNG is several megabytes of base64
  * in a single `data:` line), so chunks are accumulated as strings and only
- * split on the event delimiter; no per-line buffering limit is imposed.
+ * split on the event delimiter. The accumulation is bounded: an event that
+ * grows past `maxEventBytes` without a delimiter fails the stream instead of
+ * growing until the process is out of memory — the bound is far above any real
+ * image (128 MiB default, versus tens of MB for a 4K `max` render) and exists
+ * for a hostile or broken upstream, not a legitimate one.
  *
  * @param stream - Readable emitting UTF-8 SSE bytes
+ * @param maxEventBytes - Ceiling on a single undelimited event (default 128 MiB)
  * @returns Async generator of raw events in arrival order
+ * @throws Error If one event exceeds maxEventBytes
  */
-export async function* parseSSEStream(stream: Readable): AsyncGenerator<RawSSEEvent> {
+export const SSE_MAX_EVENT_BYTES = 128 * 1024 * 1024;
+
+export async function* parseSSEStream(
+  stream: Readable,
+  maxEventBytes: number = SSE_MAX_EVENT_BYTES
+): AsyncGenerator<RawSSEEvent> {
   let buffer = '';
   // Where the next boundary search starts. Without it every chunk rescans the
   // whole buffer, which is quadratic on a multi-megabyte single-line payload;
@@ -423,6 +468,10 @@ export async function* parseSSEStream(stream: Readable): AsyncGenerator<RawSSEEv
 
   for await (const chunk of stream) {
     buffer += typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8');
+    if (buffer.length > maxEventBytes) {
+      stream.destroy();
+      throw new Error(`SSE event exceeded ${maxEventBytes} bytes without a delimiter; aborting stream`);
+    }
 
     // Events end at a blank line; tolerate CRLF, LF, and a mixed pair
     const delimiter = /\r?\n\r?\n/g;

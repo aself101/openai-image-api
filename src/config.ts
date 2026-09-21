@@ -38,14 +38,34 @@ import type {
   FlexibleSizeConstraint,
 } from './types.js';
 
-// Load environment variables in priority order:
-// 1. First try local .env in current directory
-dotenv.config();
+let envLoaded = false;
 
-// 2. Then try global config in home directory (if local .env doesn't exist)
-const globalConfigPath: string = join(homedir(), '.openai', '.env');
-if (existsSync(globalConfigPath)) {
-  dotenv.config({ path: globalConfigPath });
+/**
+ * Load `.env` files into process.env: the current directory's `.env`, then
+ * `~/.openai/.env`. Neither overrides a variable that is already set.
+ *
+ * Through 2.x this ran unconditionally at import time, so any server that
+ * imported the SDK had its process.env probed from whatever `.env` sat in its
+ * cwd. It now runs only when a key is actually being looked up (see
+ * getOpenAIApiKey) and never when `OPENAI_IMAGE_API_NO_DOTENV` is set — an SDK
+ * consumer that manages its own configuration can opt out entirely. Idempotent.
+ *
+ * @returns True if the load ran (or had already run), false if opted out
+ */
+export function loadEnvConfig(): boolean {
+  if (process.env.OPENAI_IMAGE_API_NO_DOTENV) return false;
+  if (envLoaded) return true;
+  envLoaded = true;
+
+  // 1. Local .env in current directory
+  dotenv.config();
+
+  // 2. Global config in home directory
+  const globalConfigPath: string = join(homedir(), '.openai', '.env');
+  if (existsSync(globalConfigPath)) {
+    dotenv.config({ path: globalConfigPath });
+  }
+  return true;
 }
 
 /** OpenAI API base URL; override per instance via APIOptions.baseUrl (HTTPS only) */
@@ -183,8 +203,11 @@ export const MODEL_CONSTRAINTS: ImageModelConstraintsMap = {
 export function getOpenAIApiKey(cliApiKey: string | null = null): string {
   // Priority order:
   // 1. CLI flag (if provided)
-  // 2. Environment variable
-  const apiKey = cliApiKey || process.env.OPENAI_API_KEY;
+  // 2. Environment variable (already set by the shell / process manager)
+  // 3. .env files, loaded only now that a key is actually needed
+  if (cliApiKey) return cliApiKey;
+  if (!process.env.OPENAI_API_KEY) loadEnvConfig();
+  const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
     const errorMessage = [

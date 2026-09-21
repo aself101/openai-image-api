@@ -40,6 +40,7 @@ import {
   validateModelParams,
   unknownModelMessage,
   deprecationNotice,
+  loadEnvConfig,
   MODELS,
   MODEL_DEPRECATIONS,
   DEFAULT_MODEL,
@@ -569,7 +570,10 @@ program
 
 // API and output configuration
 program
-  .option('--api-key <key>', 'OpenAI API key (overrides environment variable)')
+  .option(
+    '--api-key <key>',
+    'OpenAI API key (overrides environment variable). Visible to other users of a shared host via the process list; prefer OPENAI_API_KEY or ~/.openai/.env there'
+  )
   .option('--output-dir <path>', 'Output directory for generated images')
   .option('--log-level <level>', 'Log level: DEBUG, INFO, WARNING, ERROR', 'INFO')
   .option('--dry-run', 'Validate parameters without making API call')
@@ -581,6 +585,10 @@ program.parse(process.argv);
  * Main CLI execution.
  */
 async function main(): Promise<void> {
+  // The CLI's documented key lookup includes ./.env and ~/.openai/.env; the
+  // library loads them lazily, the CLI up front so OPENAI_OUTPUT_DIR is seen too.
+  loadEnvConfig();
+
   let options: CLIOptions;
   try {
     options = readOptions(program.opts());
@@ -627,6 +635,10 @@ async function main(): Promise<void> {
     const deprecation = getModelDeprecation(model);
     if (deprecation) {
       logger.warn(deprecationNotice(model, deprecation));
+    }
+
+    if (options.apiKey) {
+      logger.warn('--api-key is visible in the process list on shared hosts; prefer OPENAI_API_KEY or ~/.openai/.env');
     }
 
     // Initialize API

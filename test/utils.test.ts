@@ -22,6 +22,8 @@ import {
   readStreamToString,
   getErrorMessage,
   getErrorCode,
+  assertSafeBaseFilename,
+  multipartFilename,
 } from '../src/utils.js';
 import { Readable } from 'stream';
 import type { RawSSEEvent } from '../src/types.js';
@@ -145,6 +147,12 @@ describe('Utility Functions', () => {
 
     it('should handle empty string', () => {
       expect(sanitizeForFilename('')).toBe('');
+    });
+
+    it('should suffix Windows reserved device names', () => {
+      expect(sanitizeForFilename('CON')).toBe('con_');
+      expect(sanitizeForFilename('com1')).toBe('com1_');
+      expect(sanitizeForFilename('console')).toBe('console');
     });
 
     it('should collapse multiple underscores', () => {
@@ -303,6 +311,21 @@ describe('Utility Functions', () => {
     });
   });
 
+  describe('assertSafeBaseFilename / multipartFilename', () => {
+    it('should accept a plain stem and reject separators and dot names', () => {
+      expect(assertSafeBaseFilename('2026_render')).toBe('2026_render');
+      for (const bad of ['a/b', 'a\\b', '..', '.', '', 'x\0y']) {
+        expect(() => assertSafeBaseFilename(bad)).toThrow('single path component');
+      }
+    });
+
+    it('should strip CR, LF and quotes from multipart filenames', () => {
+      expect(multipartFilename('/tmp/evil\r\nX-Injected: 1".png')).toBe('evil__X-Injected: 1_.png');
+      expect(multipartFilename('/tmp/dir/')).toBe('dir');
+      expect(multipartFilename('')).toBe('image');
+    });
+  });
+
   describe('writeToFile binary guard', () => {
     it('should refuse a binary write of a non-Buffer', async () => {
       await expect(writeToFile('not a buffer', path.join(TEST_DIR, 'x.png'))).rejects.toThrow(
@@ -338,9 +361,9 @@ describe('Utility Functions', () => {
   });
 
   describe('parseSSEStream', () => {
-    const collect = async (stream: Readable) => {
+    const collect = async (stream: Readable, maxEventBytes?: number) => {
       const out: RawSSEEvent[] = [];
-      for await (const e of parseSSEStream(stream)) out.push(e);
+      for await (const e of parseSSEStream(stream, maxEventBytes)) out.push(e);
       return out;
     };
 
@@ -412,6 +435,12 @@ describe('Utility Functions', () => {
       expect(events).toHaveLength(2);
       expect(events[0].data).toHaveLength(300_000);
       expect(events[1]).toEqual({ event: 'f', data: 'tail' });
+    });
+
+    it('should abort an event that exceeds the byte ceiling', async () => {
+      const stream = Readable.from(['data: ' + 'X'.repeat(5000), 'Y'.repeat(5000), 'Z'.repeat(5000)]);
+      await expect(collect(stream, 8000)).rejects.toThrow('exceeded 8000 bytes');
+      expect(stream.destroyed).toBe(true);
     });
 
     it('should preserve large single-line payloads intact', async () => {

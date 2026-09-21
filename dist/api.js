@@ -29,7 +29,7 @@ import path from 'path';
 import { Readable } from 'stream';
 import winston from 'winston';
 import { getOpenAIApiKey, BASE_URL, ENDPOINTS, DEFAULT_MODEL, validateModelParams, getModelConstraints, getModelDeprecation, deprecationNotice, } from './config.js';
-import { decodeBase64Image, parseSSEStream, readStreamToString, validateImagePath, getErrorMessage, } from './utils.js';
+import { decodeBase64Image, parseSSEStream, readStreamToString, validateImagePath, validateOutputPath, assertSafeBaseFilename, multipartFilename, getErrorMessage, } from './utils.js';
 /**
  * Error thrown for every failed API interaction.
  *
@@ -53,7 +53,14 @@ export class OpenAIImageAPIError extends Error {
      * or early stream end). `status` is undefined for all four.
      */
     type;
-    /** `error.message` from the API body, when present (unsanitized) */
+    /**
+     * `error.message` from the API body, when present — deliberately NOT subject
+     * to the `NODE_ENV=production` sanitization applied to `message`. That
+     * sanitization protects a server's end users from internal detail; the key
+     * holder reading this field is the party the API's message is addressed to,
+     * and OpenAI's error text names the rejected parameter or policy, not
+     * internal paths. Do not forward it to end users unreviewed.
+     */
     apiMessage;
     constructor(message, details = {}) {
         super(message, details.cause === undefined ? undefined : { cause: details.cause });
@@ -106,6 +113,12 @@ function streamErrorMessage(value) {
 }
 /** Default per-request timeout; see APIOptions.requestTimeout for rationale */
 const DEFAULT_REQUEST_TIMEOUT = 180_000;
+/**
+ * Ceiling on a buffered (non-streaming) response body. Ten `max`-quality 4K
+ * images as base64 fit well inside this; it exists so a hostile or broken
+ * upstream cannot make axios buffer without limit.
+ */
+const MAX_RESPONSE_BYTES = 256 * 1024 * 1024;
 /**
  * Wrapper class for the OpenAI Image API.
  *
@@ -313,11 +326,12 @@ export class OpenAIImageAPI {
         });
         try {
             let response;
+            const limits = { maxContentLength: MAX_RESPONSE_BYTES, maxBodyLength: MAX_RESPONSE_BYTES };
             if (method.toUpperCase() === 'GET') {
-                response = await axios.get(url, { headers, timeout: this.requestTimeout });
+                response = await axios.get(url, { headers, timeout: this.requestTimeout, ...limits });
             }
             else if (method.toUpperCase() === 'POST') {
-                response = await axios.post(url, data, { headers, timeout: this.requestTimeout });
+                response = await axios.post(url, data, { headers, timeout: this.requestTimeout, ...limits });
             }
             else {
                 throw new Error(`Unsupported HTTP method: ${method}`);
@@ -460,7 +474,9 @@ export class OpenAIImageAPI {
         const { image, prompt, model = DEFAULT_MODEL, mask, size, n, quality, input_fidelity, background, output_format, output_compression, moderation, user, partial_images, stream, } = params;
         const formData = new FormData();
         const images = Array.isArray(image) ? image : [image];
-        images.forEach((imgPath) => formData.append('image[]', createReadStream(imgPath)));
+        // An explicit filename keeps form-data from deriving one from the path,
+        // which is where a CRLF in a hostile path would otherwise land.
+        images.forEach((imgPath) => formData.append('image[]', createReadStream(imgPath), { filename: multipartFilename(imgPath) }));
         formData.append('prompt', prompt);
         formData.append('model', model);
         if (n !== undefined)
@@ -470,7 +486,7 @@ export class OpenAIImageAPI {
         if (quality)
             formData.append('quality', quality);
         if (mask)
-            formData.append('mask', createReadStream(mask));
+            formData.append('mask', createReadStream(mask), { filename: multipartFilename(mask) });
         if (input_fidelity)
             formData.append('input_fidelity', input_fidelity);
         if (background)
@@ -698,19 +714,29 @@ export class OpenAIImageAPI {
     /**
      * Decode and save images from an API response.
      *
+     * Both path inputs are checked before anything is written: `outputDir` may
+     * not contain a `..` segment, and `baseFilename` must be a single path
+     * component (no separators, not `.`/`..`). A server that forwards end-user
+     * input into this method therefore cannot be steered outside `outputDir`.
+     * Callers who need to write elsewhere should use `decodeBase64Image` with a
+     * path they have validated themselves.
+     *
      * @param response - API response object
-     * @param outputDir - Directory to save images
-     * @param baseFilename - Base filename (without extension)
+     * @param outputDir - Directory to save images (created if missing)
+     * @param baseFilename - Base filename (without extension); one path component
      * @param format - Image format (png, jpeg, webp). Defaults to the response's
      *   `output_format`, then png.
      * @returns Array of saved file paths
+     * @throws Error If outputDir contains a `..` segment or baseFilename is not a single component
      */
     async saveImages(response, outputDir, baseFilename, format) {
-        const ext = format ?? response.output_format ?? 'png';
+        const safeDir = validateOutputPath(outputDir);
+        assertSafeBaseFilename(baseFilename);
+        const ext = (format ?? response.output_format ?? 'png').replace(/[^a-z0-9]/gi, '') || 'png';
         const savedPaths = [];
         for (const [i, imageData] of response.data.entries()) {
             const filename = response.data.length > 1 ? `${baseFilename}_${i + 1}.${ext}` : `${baseFilename}.${ext}`;
-            const filepath = path.join(outputDir, filename);
+            const filepath = path.join(safeDir, filename);
             if (!imageData.b64_json) {
                 this.logger.warn(`No image data found for index ${i}`);
                 continue;

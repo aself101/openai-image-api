@@ -47,7 +47,14 @@ export declare class OpenAIImageAPIError extends Error {
      * or early stream end). `status` is undefined for all four.
      */
     readonly type?: string;
-    /** `error.message` from the API body, when present (unsanitized) */
+    /**
+     * `error.message` from the API body, when present — deliberately NOT subject
+     * to the `NODE_ENV=production` sanitization applied to `message`. That
+     * sanitization protects a server's end users from internal detail; the key
+     * holder reading this field is the party the API's message is addressed to,
+     * and OpenAI's error text names the rejected parameter or policy, not
+     * internal paths. Do not forward it to end users unreviewed.
+     */
     readonly apiMessage?: string;
     constructor(message: string, details?: {
         status?: number;
@@ -240,12 +247,20 @@ export declare class OpenAIImageAPI {
     /**
      * Decode and save images from an API response.
      *
+     * Both path inputs are checked before anything is written: `outputDir` may
+     * not contain a `..` segment, and `baseFilename` must be a single path
+     * component (no separators, not `.`/`..`). A server that forwards end-user
+     * input into this method therefore cannot be steered outside `outputDir`.
+     * Callers who need to write elsewhere should use `decodeBase64Image` with a
+     * path they have validated themselves.
+     *
      * @param response - API response object
-     * @param outputDir - Directory to save images
-     * @param baseFilename - Base filename (without extension)
+     * @param outputDir - Directory to save images (created if missing)
+     * @param baseFilename - Base filename (without extension); one path component
      * @param format - Image format (png, jpeg, webp). Defaults to the response's
      *   `output_format`, then png.
      * @returns Array of saved file paths
+     * @throws Error If outputDir contains a `..` segment or baseFilename is not a single component
      */
     saveImages(response: ImageResponse, outputDir: string, baseFilename: string, format?: string): Promise<string[]>;
 }

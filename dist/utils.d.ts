@@ -93,6 +93,28 @@ export declare function decodeBase64Image(b64Data: string, filepath: string): Pr
  */
 export declare function sanitizeForFilename(text: string, maxLength?: number): string;
 /**
+ * Assert that a caller-supplied base filename is a single path component.
+ *
+ * `saveImages()` joins this with the output directory; a value carrying a
+ * separator or `..` would let a server that forwards end-user input into the
+ * SDK write outside the directory it chose. Rejected rather than sanitized so
+ * the caller learns about it.
+ *
+ * @param name - Proposed base filename (without extension)
+ * @returns The same name
+ * @throws Error If the name is empty, contains a path separator, or is `.`/`..`
+ */
+export declare function assertSafeBaseFilename(name: string): string;
+/**
+ * Multipart part filename derived from a path: the basename with CR, LF and
+ * double quotes replaced, so a hostile path cannot inject header lines into
+ * the multipart body regardless of the form-data version in use.
+ *
+ * @param filePath - Path of the file being uploaded
+ * @returns A header-safe filename
+ */
+export declare function multipartFilename(filePath: string): string;
+/**
  * Generate filename from prompt text.
  *
  * @param prompt - The image generation prompt
@@ -128,12 +150,19 @@ export declare function createSpinner(message?: string): Spinner;
  *
  * Image payloads are large (a `max`-quality PNG is several megabytes of base64
  * in a single `data:` line), so chunks are accumulated as strings and only
- * split on the event delimiter; no per-line buffering limit is imposed.
+ * split on the event delimiter. The accumulation is bounded: an event that
+ * grows past `maxEventBytes` without a delimiter fails the stream instead of
+ * growing until the process is out of memory — the bound is far above any real
+ * image (128 MiB default, versus tens of MB for a 4K `max` render) and exists
+ * for a hostile or broken upstream, not a legitimate one.
  *
  * @param stream - Readable emitting UTF-8 SSE bytes
+ * @param maxEventBytes - Ceiling on a single undelimited event (default 128 MiB)
  * @returns Async generator of raw events in arrival order
+ * @throws Error If one event exceeds maxEventBytes
  */
-export declare function parseSSEStream(stream: Readable): AsyncGenerator<RawSSEEvent>;
+export declare const SSE_MAX_EVENT_BYTES: number;
+export declare function parseSSEStream(stream: Readable, maxEventBytes?: number): AsyncGenerator<RawSSEEvent>;
 /**
  * Read an entire stream into a UTF-8 string.
  *
