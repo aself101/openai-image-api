@@ -152,11 +152,16 @@ export declare function validateFlexibleSize(size: string, rule: FlexibleSizeCon
  * Validate parameters for a specific model.
  *
  * Accepts generation, edit, and streaming parameter shapes; fields a shape does
- * not carry are simply absent and skipped.
+ * not carry are simply absent and skipped. This is the constraint-table check
+ * only — presence of a prompt and the existence of input files are checked by
+ * OpenAIImageAPI.validateRequest().
  *
  * @param model - The model identifier
  * @param params - Parameters to validate
  * @returns Validation result with valid flag and errors array
+ * @example
+ * const { valid, errors } = validateModelParams('gpt-image-2', { size: '2048x1152', quality: 'max' });
+ * // valid === false; errors[0] → 'Invalid quality "max" for gpt-image-2. Valid options: auto, low, medium, high'
  */
 export declare function validateModelParams(model: string, params: Partial<GenerateImageParams & EditImageParams & StreamParams>): ValidationResult;
 //# sourceMappingURL=config.d.ts.map

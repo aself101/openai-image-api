@@ -34,9 +34,7 @@ export type ImageModelFamily =
 
 /** Dated model snapshots accepted by the API. */
 export type ImageModelSnapshot =
-  | 'gpt-image-2.5-sunburst-2026-09-08'
-  | 'gpt-image-2.5-flare-2026-09-08'
-  | 'gpt-image-2-2026-04-21';
+  'gpt-image-2.5-sunburst-2026-09-08' | 'gpt-image-2.5-flare-2026-09-08' | 'gpt-image-2-2026-04-21';
 
 /** Any model identifier this package will send to the API. */
 export type ImageModel = ImageModelFamily | ImageModelSnapshot;
@@ -271,9 +269,7 @@ export interface ImageEditCompletedEvent extends ImageStreamEventBase {
 }
 
 /** Any event from a streaming generation request */
-export type ImageGenerationStreamEvent =
-  | ImageGenerationPartialImageEvent
-  | ImageGenerationCompletedEvent;
+export type ImageGenerationStreamEvent = ImageGenerationPartialImageEvent | ImageGenerationCompletedEvent;
 
 /** Any event from a streaming edit request */
 export type ImageEditStreamEvent = ImageEditPartialImageEvent | ImageEditCompletedEvent;

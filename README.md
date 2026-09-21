@@ -7,13 +7,14 @@
 
 A Node.js wrapper for the [OpenAI Image API](https://developers.openai.com/api/reference/resources/images) — `/v1/images/generations` and `/v1/images/edits` — for the GPT Image model family: **GPT Image 2.5** (Sunburst, Flare), **GPT Image 2**, and the deprecated GPT Image 1.x models. Generate and edit images, with streaming partial-image delivery, via CLI or programmatic API.
 
-This service follows the data-collection architecture pattern with organized data storage, logging, parameter validation, and CLI orchestration. Written in **TypeScript** with full type definitions included.
+This service follows the data-collection architecture pattern with organized data storage, logging, parameter validation, and CLI orchestration. Written in **TypeScript** with full type definitions included. Requires **Node.js 18 or newer**.
 
 > **Upgrading from 2.x?** DALL-E 2/3, image variations, and Sora video generation were removed in 3.0.0 because OpenAI has shut down (or is about to shut down) those APIs. See [Migrating from 2.x](#migrating-from-2x).
 
 ## Quick Start
 
 ### CLI Usage
+
 ```bash
 # Install globally
 npm install -g openai-image-api
@@ -31,6 +32,7 @@ openai-img --sunburst --edit --image photo.png --prompt "make the sky stormy"
 ```
 
 ### Programmatic Usage
+
 ```typescript
 import { OpenAIImageAPI } from 'openai-image-api';
 
@@ -43,7 +45,7 @@ const result = await api.generateImage({
   quality: 'high',
   size: '1536x1024',
 });
-await api.saveImages(result, './out', 'mountains');   // → ./out/mountains.png
+await api.saveImages(result, './out', 'mountains'); // → ./out/mountains.png
 
 // Streaming generation with partial frames
 const streamed = await api.generateImageStream(
@@ -74,27 +76,27 @@ await api.saveImages(streamed, './out', 'river');
 
 The package wraps the two Image API endpoints:
 
-| Endpoint | Method | Streaming variant |
-|---|---|---|
-| `POST /v1/images/generations` | `generateImage()` | `streamImage()` / `generateImageStream()` |
-| `POST /v1/images/edits` | `generateImageEdit()` | `streamImageEdit()` / `generateImageEditStream()` |
+| Endpoint                      | Method                | Streaming variant                                 |
+| ----------------------------- | --------------------- | ------------------------------------------------- |
+| `POST /v1/images/generations` | `generateImage()`     | `streamImage()` / `generateImageStream()`         |
+| `POST /v1/images/edits`       | `generateImageEdit()` | `streamImageEdit()` / `generateImageEditStream()` |
 
 Every request is validated client-side against the model's published constraints (sizes, quality tiers, formats, `n`, `partial_images`, `input_fidelity`) before any network call, so a bad parameter fails fast with a specific message rather than a generic 400.
 
-**The constraint tables are a transcription of OpenAI's reference as of 2026-09-20.** That cuts both ways: when OpenAI *tightens* a limit the request goes out and the API's own 400 comes back; when OpenAI *loosens* one, or ships a model this release does not know, the validator says no before the network. For that case pass `skipValidation: true` (library) or `--no-validate` (CLI): the request is sent as-is and the API is the judge. `--dry-run` reports what this package would reject, not what the API would.
+**The constraint tables are a transcription of OpenAI's reference as of 2026-09-20.** That cuts both ways: when OpenAI _tightens_ a limit the request goes out and the API's own 400 comes back; when OpenAI _loosens_ one, or ships a model this release does not know, the validator says no before the network. For that case pass `skipValidation: true` (library) or `--no-validate` (CLI): the request is sent as-is and the API is the judge. `--dry-run` reports what this package would reject, not what the API would.
 
-The Responses API `image_generation` *tool* (multi-turn conversational editing) is a different surface and is not wrapped here.
+The Responses API `image_generation` _tool_ (multi-turn conversational editing) is a different surface and is not wrapped here.
 
 ## Models
 
-| Model | Sizes | Quality | Notes |
-|---|---|---|---|
-| `gpt-image-2.5-sunburst` | standard + flexible | `auto` `low` `medium` `high` `xhigh` `max` | Editing precision |
+| Model                               | Sizes               | Quality                                    | Notes                                  |
+| ----------------------------------- | ------------------- | ------------------------------------------ | -------------------------------------- |
+| `gpt-image-2.5-sunburst`            | standard + flexible | `auto` `low` `medium` `high` `xhigh` `max` | Editing precision                      |
 | `gpt-image-2.5-flare` **(default)** | standard + flexible | `auto` `low` `medium` `high` `xhigh` `max` | Fast, high-quality everyday generation |
-| `gpt-image-2` | standard + flexible | `auto` `low` `medium` `high` | Up to 4K |
-| `gpt-image-1.5` | standard | `auto` `low` `medium` `high` | **Shutdown 2026-12-01** |
-| `gpt-image-1` | standard | `auto` `low` `medium` `high` | **Shutdown 2026-10-23** |
-| `gpt-image-1-mini` | standard | `auto` `low` `medium` `high` | **Shutdown 2026-12-01** |
+| `gpt-image-2`                       | standard + flexible | `auto` `low` `medium` `high`               | Up to 4K                               |
+| `gpt-image-1.5`                     | standard            | `auto` `low` `medium` `high`               | **Shutdown 2026-12-01**                |
+| `gpt-image-1`                       | standard            | `auto` `low` `medium` `high`               | **Shutdown 2026-10-23**                |
+| `gpt-image-1-mini`                  | standard            | `auto` `low` `medium` `high`               | **Shutdown 2026-12-01**                |
 
 **Standard sizes:** `1024x1024`, `1536x1024`, `1024x1536`, `auto`.
 
@@ -215,31 +217,31 @@ import {
 
 // Constraints and helpers
 import {
-  MODEL_CONSTRAINTS,        // per-family sizes/quality/limits
-  MODEL_DEPRECATIONS,       // shutdown dates for the 1.x models
-  MODEL_ALIASES,            // dated snapshot → family
-  MODELS,                   // CLI short names → model ids
-  DEFAULT_MODEL,            // 'gpt-image-2.5-flare'
-  validateModelParams,      // the pre-flight validator the API class runs
-  validateFlexibleSize,     // WIDTHxHEIGHT rules for gpt-image-2 / 2.5
+  MODEL_CONSTRAINTS, // per-family sizes/quality/limits
+  MODEL_DEPRECATIONS, // shutdown dates for the 1.x models
+  MODEL_ALIASES, // dated snapshot → family
+  MODELS, // CLI short names → model ids
+  DEFAULT_MODEL, // 'gpt-image-2.5-flare'
+  validateModelParams, // the pre-flight validator the API class runs
+  validateFlexibleSize, // WIDTHxHEIGHT rules for gpt-image-2 / 2.5
   getModelConstraints,
   getModelDeprecation,
   resolveModelFamily,
   isSupportedModel,
-  getOpenAIApiKey,          // CLI flag → env resolution used by the constructor
-  validateApiKeyFormat,     // shape check only; does not call the API
-  getOutputDir,             // OPENAI_OUTPUT_DIR or 'datasets/openai'
+  getOpenAIApiKey, // CLI flag → env resolution used by the constructor
+  validateApiKeyFormat, // shape check only; does not call the API
+  getOutputDir, // OPENAI_OUTPUT_DIR or 'datasets/openai'
 } from 'openai-image-api/config';
 
 // File and stream helpers used by the CLI, exported for reuse
 import {
-  decodeBase64Image,        // write a b64 payload to disk (creates directories)
-  validateImagePath,        // magic-byte check: PNG/JPEG/WebP/GIF
-  validateOutputPath,       // reject '..' traversal, optionally pin to a base dir
+  decodeBase64Image, // write a b64 payload to disk (creates directories)
+  validateImagePath, // magic-byte check: PNG/JPEG/WebP/GIF
+  validateOutputPath, // reject '..' traversal, optionally pin to a base dir
   generateTimestampedFilename,
   sanitizeForFilename,
-  parseSSEStream,           // raw SSE → { event, data } async generator
-  getErrorMessage,          // message from an `unknown` catch value
+  parseSSEStream, // raw SSE → { event, data } async generator
+  getErrorMessage, // message from an `unknown` catch value
 } from 'openai-image-api/utils';
 ```
 
@@ -247,14 +249,16 @@ import {
 
 ### Project Structure
 
-```
+```text
 openai-image-api/
-├── src/
+├── src/                    # Published alongside dist/ so source maps resolve
 │   ├── api.ts              # OpenAIImageAPI class (buffered + streaming)
 │   ├── config.ts           # Model constraints, deprecations, validation
 │   ├── utils.ts            # File I/O, image header checks, SSE parser
-│   ├── cli.ts              # CLI entry point
+│   ├── cli-core.ts         # CLI logic (testable in-process)
+│   ├── cli.ts              # CLI bin entry (argv / exit wiring)
 │   └── types.ts            # Type definitions
+├── scripts/check-reference.mjs  # Diff config against OpenAI's published reference
 ├── dist/                   # Compiled JavaScript (committed for npm)
 ├── test/                   # Vitest suites
 └── tsconfig.json
@@ -305,30 +309,30 @@ openai-img --stream --partial-images 2 --prompt "a cat"
 
 ### Options
 
-| Option | Description |
-|---|---|
-| `--prompt <text>` | Text prompt (repeat for batch generation) |
-| `--image <path>` | Input image for `--edit` (repeatable) |
-| `--mask <path>` | Mask image for `--edit` |
-| `--size <size>` | `WIDTHxHEIGHT` or `auto` |
-| `--quality <q>` | `auto`, `low`, `medium`, `high`; `xhigh`, `max` on 2.5 |
-| `--n <number>` | Images per request, 1–10 |
-| `--background <bg>` | `auto`, `transparent`, `opaque` |
-| `--output-format <f>` | `png`, `jpeg`, `webp` |
-| `--output-compression <pct>` | 0–100, jpeg/webp only |
-| `--moderation <level>` | `auto`, `low` |
-| `--input-fidelity <level>` | `high`, `low` — gpt-image-1.x edits only |
-| `--stream` | Stream the response |
-| `--partial-images <n>` | 0–3 partial frames (requires `--stream`) |
-| `--no-validate` | Skip the client-side constraint check; accepts any `--model` id |
-| `--user <id>` | End-user identifier |
-| `--api-key <key>` | Override environment key |
-| `--output-dir <path>` | Output directory (default `datasets/openai/<model>`) |
-| `--log-level <level>` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `--dry-run` | Validate parameters without calling the API |
-| `--examples` | Show usage examples |
+| Option                       | Description                                                     |
+| ---------------------------- | --------------------------------------------------------------- |
+| `--prompt <text>`            | Text prompt (repeat for batch generation)                       |
+| `--image <path>`             | Input image for `--edit` (repeatable)                           |
+| `--mask <path>`              | Mask image for `--edit`                                         |
+| `--size <size>`              | `WIDTHxHEIGHT` or `auto`                                        |
+| `--quality <q>`              | `auto`, `low`, `medium`, `high`; `xhigh`, `max` on 2.5          |
+| `--n <number>`               | Images per request, 1–10                                        |
+| `--background <bg>`          | `auto`, `transparent`, `opaque`                                 |
+| `--output-format <f>`        | `png`, `jpeg`, `webp`                                           |
+| `--output-compression <pct>` | 0–100, jpeg/webp only                                           |
+| `--moderation <level>`       | `auto`, `low`                                                   |
+| `--input-fidelity <level>`   | `high`, `low` — gpt-image-1.x edits only                        |
+| `--stream`                   | Stream the response                                             |
+| `--partial-images <n>`       | 0–3 partial frames (requires `--stream`)                        |
+| `--no-validate`              | Skip the client-side constraint check; accepts any `--model` id |
+| `--user <id>`                | End-user identifier                                             |
+| `--api-key <key>`            | Override environment key                                        |
+| `--output-dir <path>`        | Output directory (default `datasets/openai/<model>`)            |
+| `--log-level <level>`        | `DEBUG`, `INFO`, `WARNING`, `ERROR`                             |
+| `--dry-run`                  | Validate parameters without calling the API                     |
+| `--examples`                 | Show usage examples                                             |
 
-`--dry-run` runs the same validator the API class does, so it reports the rejection *this package* would issue; with `--no-validate` it prints the parameters as they would be sent.
+`--dry-run` runs the full pre-flight a real request runs — API key present, prompt present, constraint table, and for edits every input file opened and header-checked — without sending anything. It reports the rejection _this package_ would issue, not what the API would say. With `--no-validate` the constraint table is skipped but files are still verified. The same check is available in code as `api.validateRequest(params)`.
 
 ## API Methods
 
@@ -338,27 +342,31 @@ All methods live on `OpenAIImageAPI`.
 
 ```typescript
 const api = new OpenAIImageAPI({
-  apiKey: 'sk-...',          // default: OPENAI_API_KEY
-  baseUrl: 'https://...',    // default: https://api.openai.com (HTTPS enforced)
-  logLevel: 'WARNING',       // DEBUG | INFO | WARNING | ERROR — default WARNING; 2.x defaulted to INFO
-  rateLimitDelay: 1000,      // ms between requests (serialized across concurrent calls)
-  requestTimeout: 180000,    // ms; image generation can take minutes at high quality
-  skipValidation: false,     // true: send unknown models / out-of-table params, let the API judge
+  apiKey: 'sk-...', // default: OPENAI_API_KEY
+  baseUrl: 'https://...', // default: https://api.openai.com (HTTPS enforced)
+  logLevel: 'WARNING', // DEBUG | INFO | WARNING | ERROR — default WARNING; 2.x defaulted to INFO
+  rateLimitDelay: 1000, // ms between requests (serialized across concurrent calls)
+  requestTimeout: 180000, // ms; image generation can take minutes at high quality
+  skipValidation: false, // true: send unknown models / out-of-table params, let the API judge
 });
 ```
+
+### `validateRequest(params, { streaming? }): Promise<ImageModel>`
+
+Runs every check a request would run — key, prompt, constraint table (unless `skipValidation`), and for edits every input file opened, size- and header-checked — and rejects with the same `OpenAIImageAPIError` the request would, without sending anything. This is what `--dry-run` calls.
 
 ### `generateImage(params): Promise<ImageResponse>`
 
 ```typescript
 const result = await api.generateImage({
-  prompt: 'a cat',                 // required, ≤ 32,000 chars
-  model: 'gpt-image-2.5-flare',    // default
+  prompt: 'a cat', // required, ≤ 32,000 chars
+  model: 'gpt-image-2.5-flare', // default
   size: '1536x1024',
   quality: 'high',
   n: 1,
   background: 'auto',
   output_format: 'png',
-  output_compression: 80,          // jpeg/webp only
+  output_compression: 80, // jpeg/webp only
   moderation: 'auto',
   user: 'user-123',
 });
@@ -369,16 +377,16 @@ const result = await api.generateImage({
 
 ```typescript
 const result = await api.generateImageEdit({
-  image: ['a.png', 'b.png'],       // string | string[], up to 16
+  image: ['a.png', 'b.png'], // string | string[], up to 16
   prompt: 'combine these',
   model: 'gpt-image-2.5-sunburst',
-  mask: 'mask.png',                // optional
-  input_fidelity: 'high',          // gpt-image-1.x only
+  mask: 'mask.png', // optional
+  input_fidelity: 'high', // gpt-image-1.x only
   // ...plus every generateImage option except prompt handling
 });
 ```
 
-Images are sent as multipart `image[]` parts; the mask as `mask`. Every input file is checked for existence, size (≤ 50 MB) and image magic bytes (PNG/JPEG/WebP) before the upload starts. The check and the upload open the file separately; if you forward end-user-controlled paths from a server, re-validate them yourself immediately before the call and do not point them at paths another user can swap.
+Images are sent as multipart `image[]` parts; the mask as `mask`. Every input file is opened once, checked for size (≤ 50 MB) and image magic bytes (PNG/JPEG/WebP), and uploaded from that same open handle — the bytes checked are the bytes sent, so a path swapped between check and upload is not picked up. Files are opened after the rate-limit wait, not held across it.
 
 ### `streamImage(params): AsyncGenerator<ImageGenerationStreamEvent>`
 
@@ -494,7 +502,7 @@ console.log(path, edited.usage);
 
 Generated images and metadata are organized by model:
 
-```
+```text
 datasets/
 └── openai/
     ├── gpt-image-2.5-flare/
@@ -552,6 +560,9 @@ npm test                # run all tests
 npm run test:watch
 npm run test:ui
 npm run test:coverage
+npm run lint            # eslint (type-aware) — also run in CI
+npm run format:check    # prettier
+npm run verify          # lint + format + type-check (src and tests) + build + test, what CI runs
 ```
 
 The suite has 214 tests across four files:
@@ -559,6 +570,7 @@ The suite has 214 tests across four files:
 - **config** — model catalogue and deprecation table, flexible-size rules (multiples of 16, aspect ratio, pixel bounds), per-model quality gating, `input_fidelity` rejection, cross-field rules (transparent+jpeg, compression without jpeg/webp), snapshot resolution.
 - **api** — request payloads per model family, default model, deprecation warning once per model, streaming (SSE reassembly across chunk boundaries, event ordering, callback wrapper, error-body recovery from a failed stream, terminal error events), edit pre-flight, `saveImages`, security (HTTPS enforcement, key redaction, production error sanitisation, rate limiting).
 - **utils** — file I/O, filename generation, image magic-byte validation, path traversal, error-message extraction, SSE parser edge cases (CRLF, multi-line data, comments, trailing event, 200 kB payloads).
+- **cli-core** — in-process tests of the CLI logic (`src/cli-core.ts`): option parsing and enum checks, model resolution, cross-flag validation, job construction, `runCli` exit codes for dry runs and batch failures.
 - **cli** — subprocess smoke tests against the built `dist/cli.js`: `--dry-run` validation failures exit non-zero with the validator's message, `--model` rejects removed ids, invalid enum flags are refused before any request.
 
 Network calls are mocked. Live verification of streaming, editing, and the `input_fidelity` behaviour was performed against the real API on 2026-09-20 during the 3.0.0 work; it is not part of `npm test`.
@@ -574,37 +586,37 @@ try {
   await api.generateImage({ prompt });
 } catch (err) {
   if (err instanceof OpenAIImageAPIError) {
-    err.status;      // HTTP status when the API answered; undefined for client-side rejections
-    err.code;        // API error.code — the stable discriminator
-    err.type;        // API error.type (e.g. 'image_generation_user_error': fix the input, do not retry unchanged)
-                     // or the package's own: 'validation_error' | 'input_error' | 'configuration_error' | 'stream_error'
-    err.apiMessage;  // the API's own message — deliberately exempt from NODE_ENV=production sanitization
-                     // (it is addressed to the key holder and names the rejected parameter or policy, not
-                     // internals); do not forward it to end users unreviewed
-    err.cause;       // the original axios error (or the underlying fs error for input_error)
+    err.status; // HTTP status when the API answered; undefined for client-side rejections
+    err.code; // API error.code — the stable discriminator
+    err.type; // API error.type (e.g. 'image_generation_user_error': fix the input, do not retry unchanged)
+    // or the package's own: 'validation_error' | 'input_error' | 'configuration_error' | 'stream_error'
+    err.apiMessage; // the API's own message — deliberately exempt from NODE_ENV=production sanitization
+    // (it is addressed to the key holder and names the rejected parameter or policy, not
+    // internals); do not forward it to end users unreviewed
+    err.cause; // the original axios error (or the underlying fs error for input_error)
   }
 }
 ```
 
 The constructor throws a plain `Error` for a non-HTTPS `baseUrl`; that is configuration, not a request.
 
-| Error | Meaning |
-|---|---|
-| `Authentication failed. Please check your API key.` | 401 |
-| `Bad request: <API message>` | 400 — the API's own message is passed through (sanitised to a generic string when `NODE_ENV=production`) |
-| `Rate limit exceeded. Please try again later.` | 429 |
-| `OpenAI service error. Please try again later.` | 500 / 502 / 503 |
-| `Parameter validation failed:\n  - ...` | Rejected client-side before any request; lists every failing rule (`type: 'validation_error'`) |
-| `Streaming requests generate a single image; omit n or set it to 1` | This package's streaming wrappers return one image; `n > 1` on a stream is refused |
-| `Image file not found: <path>` / `File does not appear to be a valid image` | Edit input failed the pre-upload check |
-| `Unknown model "<id>". Supported: ...` | Model id not in the catalogue (DALL-E ids land here) |
-| `Stream error: <message>` | The API sent a terminal `error` event mid-stream (`type: 'stream_error'`) |
-| `Stream ended without an image_generation.completed event` | Connection closed early |
-| `Unexpected response shape from <endpoint>` | 200 without a `data[]` array |
+| Error                                                                       | Meaning                                                                                                  |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `Authentication failed. Please check your API key.`                         | 401                                                                                                      |
+| `Bad request: <API message>`                                                | 400 — the API's own message is passed through (sanitised to a generic string when `NODE_ENV=production`) |
+| `Rate limit exceeded. Please try again later.`                              | 429                                                                                                      |
+| `OpenAI service error. Please try again later.`                             | 500 / 502 / 503                                                                                          |
+| `Parameter validation failed:\n  - ...`                                     | Rejected client-side before any request; lists every failing rule (`type: 'validation_error'`)           |
+| `Streaming requests generate a single image; omit n or set it to 1`         | This package's streaming wrappers return one image; `n > 1` on a stream is refused                       |
+| `Image file not found: <path>` / `File does not appear to be a valid image` | Edit input failed the pre-upload check                                                                   |
+| `Unknown model "<id>". Supported: ...`                                      | Model id not in the catalogue (DALL-E ids land here)                                                     |
+| `Stream error: <message>`                                                   | The API sent a terminal `error` event mid-stream (`type: 'stream_error'`)                                |
+| `Stream ended without an image_generation.completed event`                  | Connection closed early                                                                                  |
+| `Unexpected response shape from <endpoint>`                                 | 200 without a `data[]` array                                                                             |
 
 Example validation failure:
 
-```
+```text
 Error: Parameter validation failed:
   - Size "1000x1000": width and height must both be multiples of 16
   - Invalid quality "max" for gpt-image-2. Valid options: auto, low, medium, high
@@ -613,38 +625,45 @@ Error: Parameter validation failed:
 ## Troubleshooting
 
 ### API Key Not Found
+
 Set `OPENAI_API_KEY` via one of the four methods in [Authentication Setup](#authentication-setup).
 
 ### `does not support the 'input_fidelity' parameter`
+
 You're editing with gpt-image-2 or a 2.5 model. Drop `--input-fidelity`; these models always use high fidelity. The client-side validator catches this before the request when the model is known.
 
 ### CI runner shows `Bad request: Invalid request parameters`
+
 `NODE_ENV=production` sanitizes `message`. The CLI appends the API's own reason in parentheses (`API: ...; code: ...`) and the library keeps it on `err.apiMessage`.
 
 ### The API accepts something this package rejects
+
 The constraint tables date from 2026-09-20. Pass `--no-validate` / `skipValidation: true` and file an issue with the API's response so the table can be updated.
 
 ### Requests time out
+
 Default timeout is 180 s. `max` quality at large sizes can exceed that; raise `requestTimeout` in `APIOptions`.
 
 ### Organization Not Verified
+
 A 400 mentioning verification means your org must complete [API Organization Verification](https://help.openai.com/en/articles/10910291-api-organization-verification).
 
 ### Model returns 404
+
 `dall-e-2`, `dall-e-3` (since 2026-05-12) and, after their dates, `gpt-image-1` (2026-10-23), `gpt-image-1.5` / `gpt-image-1-mini` (2026-12-01) are removed from the API. Migrate to `gpt-image-2` or a 2.5 model.
 
 ## Migrating from 2.x
 
 3.0.0 is a breaking release. Everything removed was removed because OpenAI shut down or scheduled shutdown of the underlying API:
 
-| Removed | Why | Replacement |
-|---|---|---|
-| `dall-e-2`, `dall-e-3` models | Shut down 2026-05-12 | `gpt-image-2.5-flare` (new default) or any GPT Image model |
-| `generateImageVariation()`, `--variation` | `/v1/images/variations` was DALL-E-2-only | Use an edit with a descriptive prompt |
-| `response_format`, `style`, `url` in responses | DALL-E-only fields; GPT Image always returns base64 | `data[i].b64_json` |
-| `OpenAIVideoAPI`, `openai-image-api/video-api`, `--video`, `--sora-2`, `--sora-2-pro`, `--remix-video`, `--list-videos`, `--delete-video`, `--seconds`, `--input-image`, `--variant` | Videos API and Sora 2 shut down 2026-09-24 | — |
-| `--dalle-2`, `--dalle-3` flags | as above | `--flare`, `--sunburst`, `--gpt-image-2`, `--model <id>` |
-| 30 s request timeout | Too short for image generation | 180 s default, `requestTimeout` option |
+| Removed                                                                                                                                                                              | Why                                                 | Replacement                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- | ---------------------------------------------------------- |
+| `dall-e-2`, `dall-e-3` models                                                                                                                                                        | Shut down 2026-05-12                                | `gpt-image-2.5-flare` (new default) or any GPT Image model |
+| `generateImageVariation()`, `--variation`                                                                                                                                            | `/v1/images/variations` was DALL-E-2-only           | Use an edit with a descriptive prompt                      |
+| `response_format`, `style`, `url` in responses                                                                                                                                       | DALL-E-only fields; GPT Image always returns base64 | `data[i].b64_json`                                         |
+| `OpenAIVideoAPI`, `openai-image-api/video-api`, `--video`, `--sora-2`, `--sora-2-pro`, `--remix-video`, `--list-videos`, `--delete-video`, `--seconds`, `--input-image`, `--variant` | Videos API and Sora 2 shut down 2026-09-24          | —                                                          |
+| `--dalle-2`, `--dalle-3` flags                                                                                                                                                       | as above                                            | `--flare`, `--sunburst`, `--gpt-image-2`, `--model <id>`   |
+| 30 s request timeout                                                                                                                                                                 | Too short for image generation                      | 180 s default, `requestTimeout` option                     |
 
 Other behaviour changes:
 

@@ -9,6 +9,9 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
+      // cli.ts is the 56-line bin entry (process.argv/process.exit wiring),
+      // covered by the subprocess tests in test/cli.test.ts; cli-core.ts, where
+      // the CLI logic lives, is measured.
       exclude: ['src/cli.ts'],
     },
   },

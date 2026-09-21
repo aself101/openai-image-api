@@ -186,12 +186,13 @@ export function getOpenAIApiKey(cliApiKey = null) {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
         const errorMessage = [
-            'OPENAI_API_KEY not found. Please provide your API key via one of these methods:',
+            'OPENAI_API_KEY not found. Provide your API key via one of these methods:',
             '',
-            '  1. CLI flag:           openai-img --api-key YOUR_KEY --prompt "..."',
-            '  2. Environment var:    export OPENAI_API_KEY=YOUR_KEY',
-            '  3. Local .env file:    Create .env in current directory with OPENAI_API_KEY=YOUR_KEY',
-            '  4. Global config:      Create ~/.openai/.env with OPENAI_API_KEY=YOUR_KEY',
+            '  1. Environment var:    export OPENAI_API_KEY=YOUR_KEY',
+            '  2. In code:            new OpenAIImageAPI({ apiKey: YOUR_KEY })',
+            '  3. Local .env file:    OPENAI_API_KEY=YOUR_KEY in ./.env',
+            '  4. Global config:      OPENAI_API_KEY=YOUR_KEY in ~/.openai/.env',
+            '  5. CLI flag:           openai-img --api-key YOUR_KEY --prompt "..."  (visible in the process list)',
             '',
             'Get your API key at https://platform.openai.com/api-keys',
         ].join('\n');
@@ -298,6 +299,12 @@ export function getModelDeprecation(model) {
  * @returns Error messages; empty when the size is acceptable
  */
 export function validateFlexibleSize(size, rule) {
+    const ruleType = typeof rule;
+    if (ruleType !== 'object' || rule === null || typeof rule.pixels !== 'object') {
+        const got = ruleType === 'string' ? `"${rule}"` : ruleType;
+        throw new TypeError('validateFlexibleSize(size, rule) expects a FlexibleSizeConstraint as its second argument — ' +
+            `pass getModelConstraints(model)?.flexibleSize, not the model id (got ${got})`);
+    }
     const match = /^(\d+)x(\d+)$/.exec(size);
     const [, widthText, heightText] = match ?? [];
     if (!match || widthText === undefined || heightText === undefined) {
@@ -328,11 +335,16 @@ export function validateFlexibleSize(size, rule) {
  * Validate parameters for a specific model.
  *
  * Accepts generation, edit, and streaming parameter shapes; fields a shape does
- * not carry are simply absent and skipped.
+ * not carry are simply absent and skipped. This is the constraint-table check
+ * only — presence of a prompt and the existence of input files are checked by
+ * OpenAIImageAPI.validateRequest().
  *
  * @param model - The model identifier
  * @param params - Parameters to validate
  * @returns Validation result with valid flag and errors array
+ * @example
+ * const { valid, errors } = validateModelParams('gpt-image-2', { size: '2048x1152', quality: 'max' });
+ * // valid === false; errors[0] → 'Invalid quality "max" for gpt-image-2. Valid options: auto, low, medium, high'
  */
 export function validateModelParams(model, params) {
     const errors = [];
@@ -405,9 +417,7 @@ export function validateModelParams(model, params) {
     // Validate partial images (streaming)
     if (params.partial_images !== undefined) {
         const { min, max } = constraints.partialImages;
-        if (!Number.isInteger(params.partial_images) ||
-            params.partial_images < min ||
-            params.partial_images > max) {
+        if (!Number.isInteger(params.partial_images) || params.partial_images < min || params.partial_images > max) {
             errors.push(`partial_images must be an integer between ${min} and ${max}`);
         }
     }

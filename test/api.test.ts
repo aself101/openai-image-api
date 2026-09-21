@@ -14,18 +14,22 @@ import type { ImageGenerationStreamEvent } from '../src/types.js';
 // Mock axios
 vi.mock('axios');
 
-// Type for API with exposed private members for testing
+// Private members reached in tests. The class's private fields make
+// `OpenAIImageAPI & TestableAPI` collapse to never, so tests hold the public
+// instance and reach privates through priv().
 interface TestableAPI {
   apiKey: string;
   baseUrl: string;
   rateLimitDelay: number;
   requestTimeout: number;
-  logger: { warn: Mock };
-  _verifyApiKey(): void;
-  _redactApiKey(apiKey: string): string;
-  _sanitizeErrorMessage(error: unknown, status: number): string;
-  _makeRequest(method: string, endpoint: string, data?: Record<string, unknown>): Promise<unknown>;
+  logger: { warn: (...args: unknown[]) => unknown; debug: (...args: unknown[]) => unknown };
+  _makeRequest(
+    method: string,
+    endpoint: string,
+    body?: { kind: 'json'; data: Record<string, unknown> }
+  ): Promise<unknown>;
 }
+const priv = (instance: OpenAIImageAPI): TestableAPI => instance as unknown as TestableAPI;
 
 /** Build an SSE body from a list of events */
 function sseBody(events: Array<{ event: string; data: unknown }>): string {
@@ -49,7 +53,7 @@ const okResponse = {
 };
 
 describe('OpenAIImageAPI', () => {
-  let api: OpenAIImageAPI & TestableAPI;
+  let api: OpenAIImageAPI;
   let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(() => {
@@ -61,7 +65,7 @@ describe('OpenAIImageAPI', () => {
     process.env.OPENAI_IMAGE_API_NO_DOTENV = '1';
 
     // Create API instance
-    api = new OpenAIImageAPI({ logLevel: 'ERROR' }) as OpenAIImageAPI & TestableAPI;
+    api = new OpenAIImageAPI({ logLevel: 'ERROR' });
 
     // Reset axios mocks
     vi.clearAllMocks();
@@ -74,30 +78,30 @@ describe('OpenAIImageAPI', () => {
 
   describe('Initialization', () => {
     it('should initialize with API key from environment', () => {
-      expect(api.apiKey).toBe('sk-test-key-123');
+      expect(priv(api).apiKey).toBe('sk-test-key-123');
     });
 
     it('should use provided API key over environment', () => {
-      const customApi = new OpenAIImageAPI({ apiKey: 'sk-custom-key' }) as OpenAIImageAPI & TestableAPI;
-      expect(customApi.apiKey).toBe('sk-custom-key');
+      const customApi = new OpenAIImageAPI({ apiKey: 'sk-custom-key' });
+      expect(priv(customApi).apiKey).toBe('sk-custom-key');
     });
 
     it('should use default base URL', () => {
-      expect(api.baseUrl).toBe('https://api.openai.com');
+      expect(priv(api).baseUrl).toBe('https://api.openai.com');
     });
 
     it('should use custom base URL if provided', () => {
       const customApi = new OpenAIImageAPI({
         apiKey: 'sk-test',
         baseUrl: 'https://custom.api.com',
-      }) as OpenAIImageAPI & TestableAPI;
-      expect(customApi.baseUrl).toBe('https://custom.api.com');
+      });
+      expect(priv(customApi).baseUrl).toBe('https://custom.api.com');
     });
 
     it('should default the request timeout to 180s and allow override', () => {
-      expect(api.requestTimeout).toBe(180000);
-      const custom = new OpenAIImageAPI({ apiKey: 'sk-test', requestTimeout: 5000 }) as OpenAIImageAPI & TestableAPI;
-      expect(custom.requestTimeout).toBe(5000);
+      expect(priv(api).requestTimeout).toBe(180000);
+      const custom = new OpenAIImageAPI({ apiKey: 'sk-test', requestTimeout: 5000 });
+      expect(priv(custom).requestTimeout).toBe(5000);
     });
   });
 
@@ -181,21 +185,22 @@ describe('OpenAIImageAPI', () => {
     });
 
     it('should throw error if prompt is missing', async () => {
-      await expect(api.generateImage({ model: 'gpt-image-2' } as { prompt: string; model: 'gpt-image-2' }))
-        .rejects.toThrow('Prompt is required');
+      await expect(
+        api.generateImage({ model: 'gpt-image-2' } as { prompt: string; model: 'gpt-image-2' })
+      ).rejects.toThrow('Prompt is required');
     });
 
     it('should validate parameters before making request', async () => {
-      await expect(
-        api.generateImage({ prompt: 'a cat', model: 'gpt-image-1.5', size: '1536x864' })
-      ).rejects.toThrow('Parameter validation failed');
+      await expect(api.generateImage({ prompt: 'a cat', model: 'gpt-image-1.5', size: '1536x864' })).rejects.toThrow(
+        'Parameter validation failed'
+      );
       expect(axios.post).not.toHaveBeenCalled();
     });
 
     it('should reject xhigh on gpt-image-2', async () => {
-      await expect(
-        api.generateImage({ prompt: 'a cat', model: 'gpt-image-2', quality: 'xhigh' })
-      ).rejects.toThrow(/Invalid quality "xhigh" for gpt-image-2/);
+      await expect(api.generateImage({ prompt: 'a cat', model: 'gpt-image-2', quality: 'xhigh' })).rejects.toThrow(
+        /Invalid quality "xhigh" for gpt-image-2/
+      );
     });
 
     it('should reject removed models', async () => {
@@ -231,7 +236,12 @@ describe('OpenAIImageAPI', () => {
     it('skipValidation should send unknown models and out-of-table params untouched', async () => {
       const loose = new OpenAIImageAPI({ apiKey: 'sk-loose', skipValidation: true, logLevel: 'ERROR' });
       (axios.post as Mock).mockResolvedValue(okResponse);
-      await loose.generateImage({ prompt: 'x', model: 'gpt-image-9-2027-01-01' as unknown as 'gpt-image-2', quality: 'ultra' as unknown as 'max', size: '7x7' });
+      await loose.generateImage({
+        prompt: 'x',
+        model: 'gpt-image-9-2027-01-01' as unknown as 'gpt-image-2',
+        quality: 'ultra' as unknown as 'max',
+        size: '7x7',
+      });
       expect((axios.post as Mock).mock.calls[0][1]).toEqual({
         prompt: 'x',
         model: 'gpt-image-9-2027-01-01',
@@ -247,28 +257,26 @@ describe('OpenAIImageAPI', () => {
 
     it('should refuse every request path when the API key is empty', async () => {
       // Reaches the guard through the public methods, not by calling the private check directly
-      api.apiKey = '';
+      priv(api).apiKey = '';
       await expect(api.generateImage({ prompt: 'a cat' })).rejects.toThrow('API key not set');
       await expect(api.generateImageEdit({ image: '/p/a.png', prompt: 'x' })).rejects.toThrow('API key not set');
       await expect(api.generateImageStream({ prompt: 'a cat' })).rejects.toThrow('API key not set');
-      await expect(api.generateImageEditStream({ image: '/p/a.png', prompt: 'x' })).rejects.toThrow(
-        'API key not set'
-      );
+      await expect(api.generateImageEditStream({ image: '/p/a.png', prompt: 'x' })).rejects.toThrow('API key not set');
       expect(axios.post).not.toHaveBeenCalled();
     });
 
     it('should warn once per deprecated model', async () => {
       (axios.post as Mock).mockResolvedValue(okResponse);
-      const warn = vi.spyOn(api.logger, 'warn');
+      const warn = vi.spyOn(priv(api).logger, 'warn');
 
       await api.generateImage({ prompt: 'x', model: 'gpt-image-1' });
       await api.generateImage({ prompt: 'y', model: 'gpt-image-1' });
       await api.generateImage({ prompt: 'z', model: 'gpt-image-1.5' });
       await api.generateImage({ prompt: 'w', model: 'gpt-image-2.5-flare' });
 
-      const messages = warn.mock.calls.map((c) => String(c[0]));
-      expect(messages.filter((m) => /Model gpt-image-1 (is scheduled|was removed)/.test(m))).toHaveLength(1);
-      expect(messages.filter((m) => /Model gpt-image-1\.5 (is scheduled|was removed)/.test(m))).toHaveLength(1);
+      const messages = warn.mock.calls.map((c: unknown[]) => String(c[0]));
+      expect(messages.filter((m: string) => /Model gpt-image-1 (is scheduled|was removed)/.test(m))).toHaveLength(1);
+      expect(messages.filter((m: string) => /Model gpt-image-1\.5 (is scheduled|was removed)/.test(m))).toHaveLength(1);
       expect(messages.join()).toMatch(/2026-10-23/);
       expect(messages.join()).toMatch(/2026-12-01/);
       expect(messages.join()).not.toMatch(/flare/);
@@ -299,7 +307,9 @@ describe('OpenAIImageAPI', () => {
       const original = {
         response: {
           status: 400,
-          data: { error: { message: 'prompt rejected', code: 'moderation_blocked', type: 'image_generation_user_error' } },
+          data: {
+            error: { message: 'prompt rejected', code: 'moderation_blocked', type: 'image_generation_user_error' },
+          },
         },
       };
       (axios.post as Mock).mockRejectedValue(original);
@@ -376,7 +386,12 @@ describe('OpenAIImageAPI', () => {
       await fs.writeFile(png, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]));
       (axios.post as Mock).mockResolvedValue(okResponse);
       try {
-        await api.generateImageEdit({ image: [png, png], prompt: 'combine', model: 'gpt-image-2.5-sunburst', quality: 'high' });
+        await api.generateImageEdit({
+          image: [png, png],
+          prompt: 'combine',
+          model: 'gpt-image-2.5-sunburst',
+          quality: 'high',
+        });
         const [url, form, config] = (axios.post as Mock).mock.calls[0];
         expect(url).toBe('https://api.openai.com/v1/images/edits');
         // form-data cannot buffer file streams; its part headers are the string entries of _streams
@@ -394,9 +409,9 @@ describe('OpenAIImageAPI', () => {
     });
 
     it('should throw error if image is missing', async () => {
-      await expect(
-        api.generateImageEdit({ prompt: 'add a hat' } as { image: string; prompt: string })
-      ).rejects.toThrow('Image is required');
+      await expect(api.generateImageEdit({ prompt: 'add a hat' } as { image: string; prompt: string })).rejects.toThrow(
+        'Image is required'
+      );
       await expect(api.generateImageEdit({ image: [], prompt: 'add a hat' })).rejects.toThrow('Image is required');
     });
 
@@ -486,7 +501,7 @@ describe('OpenAIImageAPI', () => {
       const seen: number[] = [];
       const result = await api.generateImageStream(
         { prompt: 'a river', partial_images: 1 },
-        { onPartialImage: async (e) => void seen.push(e.partial_image_index) }
+        { onPartialImage: (e) => void seen.push(e.partial_image_index) }
       );
 
       expect(seen).toEqual([0]);
@@ -523,9 +538,13 @@ describe('OpenAIImageAPI', () => {
 
     it('should surface a terminal error event as a thrown error (nested and flat shapes)', async () => {
       (axios.post as Mock).mockResolvedValue({
-        data: Readable.from([sseBody([{ event: 'error', data: { type: 'error', error: { message: 'content policy' } } }])]),
+        data: Readable.from([
+          sseBody([{ event: 'error', data: { type: 'error', error: { message: 'content policy' } } }]),
+        ]),
       });
-      const err = (await api.generateImageStream({ prompt: 'a river' }).catch((e: unknown) => e)) as OpenAIImageAPIError;
+      const err = (await api
+        .generateImageStream({ prompt: 'a river' })
+        .catch((e: unknown) => e)) as OpenAIImageAPIError;
       expect(err).toBeInstanceOf(OpenAIImageAPIError);
       expect(err.message).toBe('Stream error: content policy');
       expect(err.type).toBe('stream_error');
@@ -538,11 +557,18 @@ describe('OpenAIImageAPI', () => {
 
     it('should skip a typed event that carries no b64_json', async () => {
       const body =
-        sseBody([{ event: 'image_generation.partial_image', data: { type: 'image_generation.partial_image', partial_image_index: 0 } }]) +
-        sseBody([{ event: 'image_generation.completed', data: completed }]);
+        sseBody([
+          {
+            event: 'image_generation.partial_image',
+            data: { type: 'image_generation.partial_image', partial_image_index: 0 },
+          },
+        ]) + sseBody([{ event: 'image_generation.completed', data: completed }]);
       (axios.post as Mock).mockResolvedValue({ data: Readable.from([body]) });
       const seen: number[] = [];
-      const result = await api.generateImageStream({ prompt: 'x' }, { onPartialImage: (e) => void seen.push(e.partial_image_index) });
+      const result = await api.generateImageStream(
+        { prompt: 'x' },
+        { onPartialImage: (e) => void seen.push(e.partial_image_index) }
+      );
       expect(seen).toEqual([]);
       expect(result.data[0].b64_json).toBe(completed.b64_json);
     });
@@ -584,9 +610,7 @@ describe('OpenAIImageAPI', () => {
         },
       });
 
-      await expect(api.generateImageStream({ prompt: 'a river' })).rejects.toThrow(
-        'Bad request: size not supported'
-      );
+      await expect(api.generateImageStream({ prompt: 'a river' })).rejects.toThrow('Bad request: size not supported');
     });
 
     it('should reject n > 1 on streaming requests', async () => {
@@ -600,7 +624,9 @@ describe('OpenAIImageAPI', () => {
     });
 
     it('should type an early stream end as a stream_error', async () => {
-      (axios.post as Mock).mockResolvedValue({ data: Readable.from([sseBody([{ event: 'image_generation.partial_image', data: partial0 }])]) });
+      (axios.post as Mock).mockResolvedValue({
+        data: Readable.from([sseBody([{ event: 'image_generation.partial_image', data: partial0 }])]),
+      });
       const err = (await api.generateImageStream({ prompt: 'x' }).catch((e: unknown) => e)) as OpenAIImageAPIError;
       expect(err).toBeInstanceOf(OpenAIImageAPIError);
       expect(err.type).toBe('stream_error');
@@ -621,22 +647,31 @@ describe('OpenAIImageAPI', () => {
     });
   });
 
-  describe('_verifyApiKey', () => {
-    it('should not throw if API key is set', () => {
-      expect(() => api._verifyApiKey()).not.toThrow();
-    });
-
-    it('should throw if API key is not set', () => {
-      expect(() => {
-        OpenAIImageAPI.prototype['_verifyApiKey'].call({ apiKey: null });
-      }).toThrow('API key not set');
-    });
-  });
-
   describe('Error Handling', () => {
     it('should handle network errors', async () => {
       (axios.post as Mock).mockRejectedValue(new Error('Network error'));
       await expect(api.generateImage({ prompt: 'a cat' })).rejects.toThrow('Request failed: Network error');
+    });
+
+    it('should point at requestTimeout on a timeout and at the network on a refused connection', async () => {
+      (axios.post as Mock).mockRejectedValue(
+        Object.assign(new Error('timeout of 180000ms exceeded'), { code: 'ECONNABORTED' })
+      );
+      await expect(api.generateImage({ prompt: 'x' })).rejects.toThrow(/exceeded requestTimeout=180000ms; raise it/);
+      (axios.post as Mock).mockRejectedValue(
+        Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })
+      );
+      await expect(api.generateImage({ prompt: 'x' })).rejects.toThrow(/could not reach https:\/\/api\.openai\.com/);
+    });
+
+    it('validateRequest should run the full pre-flight without sending', async () => {
+      await expect(api.validateRequest({ prompt: '' })).rejects.toThrow('Prompt is required');
+      await expect(api.validateRequest({ prompt: 'x', n: 2 }, { streaming: true })).rejects.toThrow('single image');
+      await expect(api.validateRequest({ image: '/nope.png', prompt: 'x' })).rejects.toThrow('Image file not found');
+      await expect(api.validateRequest({ prompt: 'x', model: 'gpt-image-2', size: '2048x1152' })).resolves.toBe(
+        'gpt-image-2'
+      );
+      expect(axios.post).not.toHaveBeenCalled();
     });
 
     it('should not crash the error handler on a non-Error rejection', async () => {
@@ -794,63 +829,75 @@ describe('OpenAIImageAPI', () => {
       }).not.toThrow();
     });
 
-    it('should redact API key in logs', () => {
-      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test1234567890' }) as OpenAIImageAPI & TestableAPI;
-      const redacted = testApi._redactApiKey('sk-test1234567890');
-      expect(redacted).toBe('sk-...7890');
-      expect(redacted).not.toContain('test1234567890');
+    it('should never write the API key to the debug log, only its redacted tail', async () => {
+      const key = 'sk-test1234567890abcdef';
+      const testApi = new OpenAIImageAPI({ apiKey: key, logLevel: 'DEBUG' });
+      const debug = vi.spyOn(priv(testApi).logger, 'debug');
+      (axios.post as Mock).mockResolvedValue(okResponse);
+
+      await testApi.generateImage({ prompt: 'x' });
+
+      const logged = JSON.stringify(debug.mock.calls);
+      expect(logged).toContain('sk-...cdef');
+      expect(logged).not.toContain(key);
+      // The real header still carries the full key
+      expect((axios.post as Mock).mock.calls[0][2].headers.Authorization).toBe(`Bearer ${key}`);
     });
 
-    it('should redact short API keys', () => {
-      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test' }) as OpenAIImageAPI & TestableAPI;
-      expect(testApi._redactApiKey('sk-test')).toBe('[REDACTED]');
+    it('should redact a short key entirely rather than leak its tail', async () => {
+      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test', logLevel: 'DEBUG' });
+      const debug = vi.spyOn(priv(testApi).logger, 'debug');
+      (axios.post as Mock).mockResolvedValue(okResponse);
+      await testApi.generateImage({ prompt: 'x' });
+      const logged = JSON.stringify(debug.mock.calls);
+      expect(logged).toContain('[REDACTED]');
+      expect(logged).not.toContain('Bearer sk-test"');
     });
 
-    it('should sanitize error messages in production', () => {
+    it('should sanitize the thrown message in production but keep the API reason on apiMessage', async () => {
       process.env.NODE_ENV = 'production';
-      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test123' }) as OpenAIImageAPI & TestableAPI;
-      const error = {
-        response: { data: { error: { message: 'Detailed internal error with sensitive information' } } },
-        message: 'Error message',
-      };
-      const sanitized = testApi._sanitizeErrorMessage(error, 400);
-      expect(sanitized).toBe('Invalid request parameters');
-      expect(sanitized).not.toContain('sensitive information');
+      (axios.post as Mock).mockRejectedValue({
+        response: { status: 400, data: { error: { message: 'Detailed internal error with sensitive information' } } },
+      });
+      const err = (await api.generateImage({ prompt: 'x' }).catch((e: unknown) => e)) as OpenAIImageAPIError;
+      expect(err.message).toBe('Bad request: Invalid request parameters');
+      expect(err.message).not.toContain('sensitive information');
+      expect(err.apiMessage).toBe('Detailed internal error with sensitive information');
       delete process.env.NODE_ENV;
     });
 
-    it('should provide detailed error messages in development', () => {
+    it('should pass the API message through outside production', async () => {
       process.env.NODE_ENV = 'development';
-      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test123' }) as OpenAIImageAPI & TestableAPI;
-      const error = {
-        response: { data: { error: { message: 'Detailed error message' } } },
-        message: 'Error message',
-      };
-      expect(testApi._sanitizeErrorMessage(error, 400)).toBe('Detailed error message');
+      (axios.post as Mock).mockRejectedValue({
+        response: { status: 400, data: { error: { message: 'Detailed error message' } } },
+      });
+      await expect(api.generateImage({ prompt: 'x' })).rejects.toThrow('Bad request: Detailed error message');
       delete process.env.NODE_ENV;
     });
 
     it('should enforce rate limiting between requests', async () => {
-      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test123', rateLimitDelay: 100 }) as OpenAIImageAPI & TestableAPI;
+      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test123', rateLimitDelay: 100 });
       vi.mocked(axios.post).mockResolvedValue({ data: { created: Date.now(), data: [{ b64_json: 'x' }] } });
 
       const startTime = Date.now();
-      await testApi._makeRequest('POST', '/test', {});
-      await testApi._makeRequest('POST', '/test', {});
+      await priv(testApi)._makeRequest('POST', '/test', { kind: 'json', data: {} });
+      await priv(testApi)._makeRequest('POST', '/test', { kind: 'json', data: {} });
       const elapsed = Date.now() - startTime;
 
       expect(elapsed).toBeGreaterThanOrEqual(90); // Allow small margin
     });
 
     it('should space concurrent callers on one instance, not release them as a burst', async () => {
-      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test123', rateLimitDelay: 60 }) as OpenAIImageAPI & TestableAPI;
+      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test123', rateLimitDelay: 60 });
       const times: number[] = [];
-      vi.mocked(axios.post).mockImplementation(async () => {
+      vi.mocked(axios.post).mockImplementation(() => {
         times.push(Date.now());
-        return { data: { created: 1, data: [{ b64_json: 'x' }] } };
+        return Promise.resolve({ data: { created: 1, data: [{ b64_json: 'x' }] } });
       });
 
-      await Promise.all([1, 2, 3, 4].map(() => testApi._makeRequest('POST', '/test', {})));
+      await Promise.all(
+        [1, 2, 3, 4].map(() => priv(testApi)._makeRequest('POST', '/test', { kind: 'json', data: {} }))
+      );
 
       times.sort((a, b) => a - b);
       for (let i = 1; i < times.length; i++) {
@@ -859,13 +906,13 @@ describe('OpenAIImageAPI', () => {
     });
 
     it('should allow custom rate limit delay', () => {
-      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test123', rateLimitDelay: 5000 }) as OpenAIImageAPI & TestableAPI;
-      expect(testApi.rateLimitDelay).toBe(5000);
+      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test123', rateLimitDelay: 5000 });
+      expect(priv(testApi).rateLimitDelay).toBe(5000);
     });
 
     it('should use default rate limit delay if not specified', () => {
-      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test123' }) as OpenAIImageAPI & TestableAPI;
-      expect(testApi.rateLimitDelay).toBe(1000);
+      const testApi = new OpenAIImageAPI({ apiKey: 'sk-test123' });
+      expect(priv(testApi).rateLimitDelay).toBe(1000);
     });
   });
 });

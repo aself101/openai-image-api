@@ -60,3 +60,7 @@ build/
 
 # TypeScript
 *.tsbuildinfo
+
+# Agent worktrees and local test output
+.claude/worktrees/
+test-cli-core-out/

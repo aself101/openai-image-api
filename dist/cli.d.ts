@@ -1,18 +1,11 @@
 #!/usr/bin/env node
 /**
- * OpenAI Image Generation - Main CLI Script
+ * OpenAI Image Generation - `openai-img` bin entry
  *
- * Command-line tool for generating and editing images with OpenAI's GPT Image
- * models (gpt-image-2.5-sunburst, gpt-image-2.5-flare, gpt-image-2, and the
- * deprecated gpt-image-1.5 / gpt-image-1 / gpt-image-1-mini).
- *
- * Usage:
- *   openai-img --prompt "a cat"                              # default: gpt-image-2.5-flare
- *   openai-img --sunburst --prompt "a cat" --quality max
- *   openai-img --gpt-image-2 --prompt "a poster" --size 2048x1152
- *   openai-img --edit --image photo.png --prompt "add a hat"
- *   openai-img --stream --partial-images 2 --prompt "a river of feathers"
- *   openai-img --model gpt-image-2.5-flare-2026-09-08 --prompt "pinned snapshot"
+ * The thin process boundary: reads the package version, hands process.argv to
+ * runCli() in cli-core.ts, and turns the returned exit code into process.exit
+ * once winston has flushed. Everything else lives in cli-core.ts so it can be
+ * unit-tested in-process.
  */
 export {};
 //# sourceMappingURL=cli.d.ts.map

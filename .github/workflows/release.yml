@@ -4,13 +4,17 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  test-and-release:
+  # Runs on every pull request and on every push to main. The release job
+  # below needs it, so a red check on main skips the publish; on a pull
+  # request there is no publish at all — merging is the first time a change
+  # reaches the release path, and it arrives already tested.
+  test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -20,10 +24,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Type-check sources and tests
+        run: npx tsc --noEmit -p tsconfig.test.json
 
       # dist/ is committed and the CLI tests run against it; a source change
       # without a rebuild would test one artifact and publish another.
@@ -34,6 +46,33 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
+  release:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Release
         env:

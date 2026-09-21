@@ -1,7 +1,7 @@
 {
   "name": "openai-image-api",
   "version": "2.1.1",
-  "description": "Generate and edit images through the OpenAI Image API \u2014 GPT Image 2.5 (Sunburst, Flare), GPT Image 2 and 1.x \u2014 with streaming partial images, a CLI, and TypeScript types",
+  "description": "Generate and edit images through the OpenAI Image API — GPT Image 2.5 (Sunburst, Flare), GPT Image 2 and 1.x — with streaming partial images, a CLI, and TypeScript types",
   "main": "dist/api.js",
   "types": "dist/api.d.ts",
   "type": "module",
@@ -32,12 +32,19 @@
   },
   "files": [
     "dist",
+    "src",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check:reference": "node scripts/check-reference.mjs",
+    "verify": "npm run lint && npm run format:check && npx tsc --noEmit -p tsconfig.test.json && npm run build && npm test",
     "prepublishOnly": "npm run build",
     "openai": "node dist/cli.js",
     "openai:help": "node dist/cli.js --help",
@@ -88,14 +95,20 @@
     "winston": "^3.11.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@semantic-release/changelog": "^7.0.0",
     "@semantic-release/git": "^11.0.1",
     "@semantic-release/github": "^12.0.9",
     "@semantic-release/npm": "^13.1.5",
     "@types/node": "^24.10.1",
     "@vitest/coverage-v8": "^4.0.10",
+    "conventional-changelog-conventionalcommits": "^9.3.1",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.8",
     "semantic-release": "^25.0.9",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.0",
     "vitest": "^4.0.10"
   }
 }

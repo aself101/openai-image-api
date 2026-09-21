@@ -30,7 +30,7 @@ describe('CLI (dist/cli.js)', () => {
   it('--dry-run validates a good request and exits 0', () => {
     const { code, out } = run('--dry-run', '--sunburst', '--prompt', 'a cat', '--quality', 'max', '--size', '1536x864');
     expect(code).toBe(0);
-    expect(out).toContain('Dry run - parameters validated successfully');
+    expect(out).toContain('Dry run - request validated successfully');
     expect(out).toContain('"model": "gpt-image-2.5-sunburst"');
   });
 
@@ -95,7 +95,17 @@ describe('CLI (dist/cli.js)', () => {
   });
 
   it('rejects input_fidelity on gpt-image-2 at dry-run', () => {
-    const { code, out } = run('--dry-run', '--gpt-image-2', '--edit', '--image', 'x.png', '--prompt', 'a', '--input-fidelity', 'high');
+    const { code, out } = run(
+      '--dry-run',
+      '--gpt-image-2',
+      '--edit',
+      '--image',
+      'x.png',
+      '--prompt',
+      'a',
+      '--input-fidelity',
+      'high'
+    );
     expect(code).toBe(1);
     expect(out).toContain('input_fidelity is not accepted by gpt-image-2');
   });
@@ -132,7 +142,7 @@ describe('CLI (dist/cli.js)', () => {
     const { code, out } = run('--dry-run', '--no-validate', '--model', 'gpt-image-9-2027-01-01', '--prompt', 'a cat');
     expect(code).toBe(0);
     expect(out).toContain("is not in this package's catalogue; sending unvalidated");
-    expect(out).toContain('validation skipped (--no-validate)');
+    expect(out).toContain('constraint check skipped (--no-validate)');
     expect(out).toContain('"model": "gpt-image-9-2027-01-01"');
   });
 
@@ -145,6 +155,18 @@ describe('CLI (dist/cli.js)', () => {
   it('--no-validate skips the per-model rules at dry-run', () => {
     const { code } = run('--dry-run', '--no-validate', '--gpt-image-2', '--prompt', 'a cat', '--quality', 'max');
     expect(code).toBe(0);
+  });
+
+  it('--dry-run rejects an empty prompt in a batch, as the real call would', () => {
+    const { code, out } = run('--dry-run', '--prompt', 'a red apple', '--prompt', '', '--prompt', 'a banana');
+    expect(code).toBe(1);
+    expect(out).toContain('Prompt is required');
+  });
+
+  it('--dry-run rejects a missing --image file, as the real call would', () => {
+    const { code, out } = run('--dry-run', '--edit', '--image', 'definitely-missing.png', '--prompt', 'x');
+    expect(code).toBe(1);
+    expect(out).toContain('Image file not found: definitely-missing.png');
   });
 
   it('exposes no Sora or DALL-E flags', () => {

@@ -25,7 +25,6 @@
 
 import axios, { type AxiosResponse } from 'axios';
 import FormData from 'form-data';
-import { createReadStream } from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
 import winston from 'winston';
@@ -34,7 +33,6 @@ import {
   BASE_URL,
   ENDPOINTS,
   DEFAULT_MODEL,
-  unknownModelMessage,
   validateModelParams,
   getModelConstraints,
   getModelDeprecation,
@@ -44,11 +42,12 @@ import {
   decodeBase64Image,
   parseSSEStream,
   readStreamToString,
-  validateImagePath,
+  openValidatedImage,
+  closeValidatedImage,
   validateOutputPath,
   assertSafeBaseFilename,
-  multipartFilename,
   getErrorMessage,
+  type ValidatedImage,
 } from './utils.js';
 import type {
   APIOptions,
@@ -115,6 +114,18 @@ export class OpenAIImageAPIError extends Error {
     this.type = details.type;
     this.apiMessage = details.apiMessage;
   }
+}
+
+/**
+ * A request body, discriminated so the header builder cannot be handed a JSON
+ * object while told it is multipart (or the reverse).
+ */
+type RequestBody = { kind: 'json'; data: Record<string, unknown> } | { kind: 'multipart'; form: FormData };
+
+/** Inputs an edit request will upload, opened and validated */
+interface EditInputs {
+  images: ValidatedImage[];
+  mask?: ValidatedImage;
 }
 
 /** The `error` object the API returns in a non-2xx JSON body */
@@ -223,7 +234,7 @@ export class OpenAIImageAPI {
       format: winston.format.combine(
         winston.format.timestamp(),
         winston.format.printf(({ timestamp, level, message }) => {
-          return `${timestamp} - ${level.toUpperCase()} - ${message}`;
+          return `${String(timestamp)} - ${level.toUpperCase()} - ${String(message)}`;
         })
       ),
       transports: [new winston.transports.Console()],
@@ -257,8 +268,7 @@ export class OpenAIImageAPI {
   private _verifyApiKey(): void {
     if (!this.apiKey) {
       throw new OpenAIImageAPIError(
-        'API key not set. Please provide apiKey during initialization ' +
-          'or set OPENAI_API_KEY environment variable.',
+        'API key not set. Please provide apiKey during initialization ' + 'or set OPENAI_API_KEY environment variable.',
         { type: 'configuration_error' }
       );
     }
@@ -334,7 +344,9 @@ export class OpenAIImageAPI {
       // The raw API message is always logged at debug so a sanitized production
       // message can still be traced by the operator holding the logs.
       if (body?.message) {
-        this.logger.debug(`API error body: status=${status} type=${body.type ?? '-'} code=${body.code ?? '-'} message=${body.message}`);
+        this.logger.debug(
+          `API error body: status=${status} type=${body.type ?? '-'} code=${body.code ?? '-'} message=${body.message}`
+        );
       }
       const sanitizedMessage = this._sanitizeErrorMessage(error, status);
       const details = { status, code: body?.code, type: body?.type, apiMessage: body?.message, cause: error };
@@ -352,7 +364,15 @@ export class OpenAIImageAPI {
       }
     }
 
-    throw new OpenAIImageAPIError(`Request failed: ${getErrorMessage(error)}`, { cause: error });
+    // No HTTP response: point at the knob or check most likely to resolve it
+    const code = (error as { code?: unknown } | null)?.code;
+    const hint =
+      code === 'ECONNABORTED' || /timeout/i.test(getErrorMessage(error))
+        ? ` (the request exceeded requestTimeout=${this.requestTimeout}ms; raise it in APIOptions for high-quality or large renders)`
+        : code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN'
+          ? ` (could not reach ${this.baseUrl}; check network access and any baseUrl override)`
+          : '';
+    throw new OpenAIImageAPIError(`Request failed: ${getErrorMessage(error)}${hint}`, { cause: error });
   }
 
   /**
@@ -376,15 +396,15 @@ export class OpenAIImageAPI {
   }
 
   /**
-   * Build request headers, merging multipart boundary headers when present.
+   * Build request headers; multipart bodies supply their own Content-Type
+   * (with boundary) via form-data.
    */
-  private _headers(data: Record<string, unknown> | FormData | null, isMultipart: boolean): Record<string, string> {
+  private _headers(body: RequestBody): Record<string, string> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
     };
-    if (isMultipart) {
-      // form-data supplies the Content-Type with its boundary
-      Object.assign(headers, (data as FormData).getHeaders?.() ?? {});
+    if (body.kind === 'multipart') {
+      Object.assign(headers, body.form.getHeaders());
     } else {
       headers['Content-Type'] = 'application/json';
     }
@@ -396,20 +416,22 @@ export class OpenAIImageAPI {
    *
    * @param method - HTTP method (GET, POST)
    * @param endpoint - API endpoint path
-   * @param data - Request payload
-   * @param isMultipart - Whether this is a multipart/form-data request
+   * @param body - Request body, or null for GET
+   * @param options.rateLimited - The caller already awaited _rateLimit() (edits
+   *   do, so input files are opened after the sleep rather than held across it)
    * @returns JSON response from API
    */
   private async _makeRequest(
     method: string,
     endpoint: string,
-    data: Record<string, unknown> | FormData | null = null,
-    isMultipart: boolean = false
+    body: RequestBody | null = null,
+    options: { rateLimited?: boolean } = {}
   ): Promise<ImageResponse> {
-    await this._rateLimit();
+    if (!options.rateLimited) await this._rateLimit();
 
     const url = `${this.baseUrl}${endpoint}`;
-    const headers = this._headers(data, isMultipart);
+    const headers = this._headers(body ?? { kind: 'json', data: {} });
+    const data = body === null ? undefined : body.kind === 'json' ? body.data : body.form;
 
     this.logger.debug(`API request: ${method} ${endpoint}`, {
       headers: { ...headers, Authorization: `Bearer ${this._redactApiKey(this.apiKey)}` },
@@ -449,18 +471,19 @@ export class OpenAIImageAPI {
    * caller instead of `[object Object]`.
    *
    * @param endpoint - API endpoint path
-   * @param data - Request payload
-   * @param isMultipart - Whether this is a multipart/form-data request
+   * @param body - Request body
+   * @param options.rateLimited - The caller already awaited _rateLimit()
    */
   private async *_makeStreamRequest<E extends ImageStreamEvent>(
     endpoint: string,
-    data: Record<string, unknown> | FormData,
-    isMultipart: boolean
+    body: RequestBody,
+    options: { rateLimited?: boolean } = {}
   ): AsyncGenerator<E> {
-    await this._rateLimit();
+    if (!options.rateLimited) await this._rateLimit();
 
     const url = `${this.baseUrl}${endpoint}`;
-    const headers = { ...this._headers(data, isMultipart), Accept: 'text/event-stream' };
+    const headers = { ...this._headers(body), Accept: 'text/event-stream' };
+    const data = body.kind === 'json' ? body.data : body.form;
 
     this.logger.debug(`API stream request: POST ${endpoint}`, {
       headers: { ...headers, Authorization: `Bearer ${this._redactApiKey(this.apiKey)}` },
@@ -483,9 +506,7 @@ export class OpenAIImageAPI {
           text = await readStreamToString(response.data);
           response.data = JSON.parse(text);
         } catch (parseError) {
-          this.logger.debug(
-            `Stream error body was not JSON (${getErrorMessage(parseError)}): ${text.slice(0, 500)}`
-          );
+          this.logger.debug(`Stream error body was not JSON (${getErrorMessage(parseError)}): ${text.slice(0, 500)}`);
           response.data = undefined;
         }
       }
@@ -569,17 +590,18 @@ export class OpenAIImageAPI {
   }
 
   /**
-   * Build the multipart form for an edit request.
+   * Build the multipart form for an edit request from inputs already opened
+   * and validated. Each part streams from the validated handle (the same
+   * descriptor whose header was checked), with an explicit filename, content
+   * type and length so form-data derives nothing from the path.
    *
    * Images are appended under `image[]` for every GPT Image model — the
    * reference's own curl examples use that key with gpt-image-1.5.
    */
-  private _buildEditForm(params: StreamEditImageParams & { stream?: boolean }): FormData {
+  private _buildEditForm(params: StreamEditImageParams & { stream?: boolean }, inputs: EditInputs): FormData {
     const {
-      image,
       prompt,
       model = DEFAULT_MODEL,
-      mask,
       size,
       n,
       quality,
@@ -594,19 +616,23 @@ export class OpenAIImageAPI {
     } = params;
 
     const formData = new FormData();
-    const images = Array.isArray(image) ? image : [image];
-    // An explicit filename keeps form-data from deriving one from the path,
-    // which is where a CRLF in a hostile path would otherwise land.
-    images.forEach((imgPath) =>
-      formData.append('image[]', createReadStream(imgPath), { filename: multipartFilename(imgPath) })
-    );
+    const part = (img: ValidatedImage) => ({
+      filename: img.filename,
+      contentType: img.mimeType,
+      knownLength: img.size,
+    });
+    for (const img of inputs.images) {
+      formData.append('image[]', img.handle.createReadStream({ autoClose: true }), part(img));
+    }
 
     formData.append('prompt', prompt);
     formData.append('model', model);
     if (n !== undefined) formData.append('n', n.toString());
     if (size) formData.append('size', size);
     if (quality) formData.append('quality', quality);
-    if (mask) formData.append('mask', createReadStream(mask), { filename: multipartFilename(mask) });
+    if (inputs.mask) {
+      formData.append('mask', inputs.mask.handle.createReadStream({ autoClose: true }), part(inputs.mask));
+    }
     if (input_fidelity) formData.append('input_fidelity', input_fidelity);
     if (background) formData.append('background', background);
     if (output_format) formData.append('output_format', output_format);
@@ -668,9 +694,9 @@ export class OpenAIImageAPI {
   }
 
   /**
-   * Shared pre-flight for edit requests.
+   * Shared pre-flight for edit requests: parameter checks only, no filesystem.
    */
-  private async _prepareEdit(params: StreamEditImageParams, streaming: boolean = false): Promise<ImageModel> {
+  private _prepareEdit(params: StreamEditImageParams, streaming: boolean = false): ImageModel {
     this._verifyApiKey();
     const model = params.model ?? DEFAULT_MODEL;
 
@@ -694,20 +720,34 @@ export class OpenAIImageAPI {
     }
 
     this._validate(model, params, streaming);
-
-    // Fail fast on inputs the API would reject: missing files, oversize files
-    // and non-image bytes, checked by header before any upload begins.
-    const maxSize = constraints?.imageMaxSize;
-    for (const file of params.mask ? [...images, params.mask] : images) {
-      try {
-        await validateImagePath(file, maxSize);
-      } catch (error) {
-        this._reject(getErrorMessage(error), 'input_error', error);
-      }
-    }
-
     this._warnIfDeprecated(model);
     return model;
+  }
+
+  /**
+   * Open and validate every input file for an edit. Called after the rate-limit
+   * sleep so descriptors are not held across it. On any failure every handle
+   * opened so far is closed before the error propagates.
+   */
+  private async _openEditInputs(params: StreamEditImageParams, model: ImageModel): Promise<EditInputs> {
+    const maxSize = getModelConstraints(model)?.imageMaxSize;
+    const paths = Array.isArray(params.image) ? params.image : [params.image];
+    const opened: ValidatedImage[] = [];
+    try {
+      for (const file of paths) {
+        opened.push(await openValidatedImage(file, maxSize));
+      }
+      const mask = params.mask ? await openValidatedImage(params.mask, maxSize) : undefined;
+      return { images: opened, mask };
+    } catch (error) {
+      await Promise.all(opened.map(closeValidatedImage));
+      this._reject(getErrorMessage(error), 'input_error', error);
+    }
+  }
+
+  /** Release every handle an edit opened; harmless when streams already closed them */
+  private async _closeEditInputs(inputs: EditInputs): Promise<void> {
+    await Promise.all([...inputs.images, ...(inputs.mask ? [inputs.mask] : [])].map(closeValidatedImage));
   }
 
   /**
@@ -727,6 +767,37 @@ export class OpenAIImageAPI {
   }
 
   // ===========================================================================
+  // Pre-flight
+  // ===========================================================================
+
+  /**
+   * Run every check a real request would run, without sending it: API key
+   * present, prompt present, parameters against the model's constraints (unless
+   * skipValidation), and for edits every input file opened, size- and
+   * header-checked, then closed. Rejects with the same OpenAIImageAPIError the
+   * request would have. The CLI's --dry-run is this method.
+   *
+   * @param params - Generation or edit parameters
+   * @param options.streaming - Apply the streaming rules (n must be 1, partial_images 0-3)
+   * @returns The resolved model id
+   * @throws OpenAIImageAPIError Exactly what the corresponding request would throw before sending
+   * @example
+   * await api.validateRequest({ image: 'photo.png', prompt: 'x', model: 'gpt-image-2', size: '2048x1152' });
+   */
+  async validateRequest(
+    params: StreamImageParams | StreamEditImageParams,
+    options: { streaming?: boolean } = {}
+  ): Promise<ImageModel> {
+    if ('image' in params && params.image !== undefined) {
+      const model = this._prepareEdit(params, options.streaming);
+      const inputs = await this._openEditInputs(params, model);
+      await this._closeEditInputs(inputs);
+      return model;
+    }
+    return this._prepareGenerate(params, options.streaming);
+  }
+
+  // ===========================================================================
   // Generation
   // ===========================================================================
 
@@ -735,6 +806,18 @@ export class OpenAIImageAPI {
    *
    * @param params - Generation parameters
    * @returns Generation response with base64 image data
+   * @throws OpenAIImageAPIError With `type: 'validation_error'` for a client-side
+   *   rejection, or `status`/`code` from the API's own error response
+   * @example
+   * const result = await api.generateImage({
+   *   prompt: 'a lighthouse in a storm',
+   *   model: 'gpt-image-2.5-sunburst',
+   *   size: '1536x1024',
+   *   quality: 'high',
+   *   output_format: 'webp',
+   *   output_compression: 80,
+   * });
+   * await api.saveImages(result, './out', 'lighthouse');
    */
   async generateImage(params: GenerateImageParams): Promise<ImageResponse> {
     const model = this._prepareGenerate(params);
@@ -743,7 +826,7 @@ export class OpenAIImageAPI {
     this.logger.info(`Generating image with ${model}: "${params.prompt.substring(0, 50)}..."`);
     this.logger.debug(`Request payload: ${JSON.stringify(payload)}`);
 
-    const response = await this._makeRequest('POST', ENDPOINTS.generate, payload, false);
+    const response = await this._makeRequest('POST', ENDPOINTS.generate, { kind: 'json', data: payload });
 
     this.logger.info(`Image generation complete. Generated ${response.data.length} image(s)`);
     return response;
@@ -754,9 +837,21 @@ export class OpenAIImageAPI {
    *
    * Yields `image_generation.partial_image` events (0 to `partial_images` of
    * them) followed by one `image_generation.completed` event carrying the
-   * final image and usage.
+   * final image and usage. Breaking out of the loop early destroys the
+   * response stream.
    *
    * @param params - Generation parameters plus `partial_images`
+   * @yields Partial-image events, then the completed event
+   * @throws OpenAIImageAPIError With `type: 'stream_error'` for a terminal error
+   *   event, or the usual request/validation errors
+   * @example
+   * for await (const event of api.streamImage({ prompt: 'a storm', partial_images: 2 })) {
+   *   if (event.type === 'image_generation.partial_image') {
+   *     await fs.promises.writeFile(`partial-${event.partial_image_index}.png`, Buffer.from(event.b64_json, 'base64'));
+   *   } else {
+   *     await fs.promises.writeFile('final.png', Buffer.from(event.b64_json, 'base64'));
+   *   }
+   * }
    */
   async *streamImage(params: StreamImageParams): AsyncGenerator<ImageGenerationStreamEvent> {
     const model = this._prepareGenerate(params, true);
@@ -765,7 +860,7 @@ export class OpenAIImageAPI {
     this.logger.info(`Streaming image with ${model}: "${params.prompt.substring(0, 50)}..."`);
     this.logger.debug(`Request payload: ${JSON.stringify(payload)}`);
 
-    yield* this._makeStreamRequest<ImageGenerationStreamEvent>(ENDPOINTS.generate, payload, false);
+    yield* this._makeStreamRequest<ImageGenerationStreamEvent>(ENDPOINTS.generate, { kind: 'json', data: payload });
   }
 
   /**
@@ -775,7 +870,13 @@ export class OpenAIImageAPI {
    * @param params - Generation parameters plus `partial_images`
    * @param handlers - Optional `onPartialImage` callback
    * @returns The completed image as an ImageResponse
-   * @throws Error If the stream ends without a completed event
+   * @throws OpenAIImageAPIError With `type: 'stream_error'` if the stream ends without a completed event
+   * @example
+   * const result = await api.generateImageStream(
+   *   { prompt: 'a storm', partial_images: 2 },
+   *   { onPartialImage: (e) => console.log(`partial ${e.partial_image_index}`) }
+   * );
+   * await api.saveImages(result, './out', 'storm');
    */
   async generateImageStream(params: StreamImageParams, handlers: StreamHandlers = {}): Promise<ImageResponse> {
     for await (const event of this.streamImage(params)) {
@@ -797,19 +898,43 @@ export class OpenAIImageAPI {
   /**
    * Edit image(s) with prompt.
    *
+   * Every input file is opened, size- and header-checked before upload, and
+   * uploaded from that same open handle.
+   *
    * @param params - Edit parameters
    * @returns Edit response with base64 image data
+   * @throws OpenAIImageAPIError With `type: 'input_error'` when an input file is
+   *   missing, too large or not a PNG/JPEG/WebP; `'validation_error'` for a
+   *   parameter the model rejects; or `status`/`code` from the API
+   * @example
+   * const result = await api.generateImageEdit({
+   *   image: ['lotion.png', 'soap.png'],
+   *   mask: 'basket-mask.png',
+   *   prompt: 'arrange these in a gift basket',
+   *   model: 'gpt-image-2.5-sunburst',
+   * });
    */
   async generateImageEdit(params: EditImageParams): Promise<ImageResponse> {
-    const model = await this._prepareEdit(params);
-    const formData = this._buildEditForm({ ...params, model });
+    const model = this._prepareEdit(params);
+    await this._rateLimit();
+    const inputs = await this._openEditInputs(params, model);
+    try {
+      const form = this._buildEditForm({ ...params, model }, inputs);
 
-    this.logger.info(`Editing image(s) with ${model}: "${params.prompt.substring(0, 50)}..."`);
+      this.logger.info(`Editing image(s) with ${model}: "${params.prompt.substring(0, 50)}..."`);
 
-    const response = await this._makeRequest('POST', ENDPOINTS.edit, formData, true);
+      const response = await this._makeRequest(
+        'POST',
+        ENDPOINTS.edit,
+        { kind: 'multipart', form },
+        { rateLimited: true }
+      );
 
-    this.logger.info(`Image edit complete. Generated ${response.data.length} image(s)`);
-    return response;
+      this.logger.info(`Image edit complete. Generated ${response.data.length} image(s)`);
+      return response;
+    } finally {
+      await this._closeEditInputs(inputs);
+    }
   }
 
   /**
@@ -819,14 +944,30 @@ export class OpenAIImageAPI {
    * `image_edit.completed` event.
    *
    * @param params - Edit parameters plus `partial_images`
+   * @yields Partial-image events, then the completed event
+   * @throws OpenAIImageAPIError As generateImageEdit, plus `type: 'stream_error'`
+   * @example
+   * for await (const event of api.streamImageEdit({ image: 'photo.png', prompt: 'make it autumn', partial_images: 1 })) {
+   *   if (event.type === 'image_edit.completed') console.log(event.usage);
+   * }
    */
   async *streamImageEdit(params: StreamEditImageParams): AsyncGenerator<ImageEditStreamEvent> {
-    const model = await this._prepareEdit(params, true);
-    const formData = this._buildEditForm({ ...params, model, stream: true });
+    const model = this._prepareEdit(params, true);
+    await this._rateLimit();
+    const inputs = await this._openEditInputs(params, model);
+    try {
+      const form = this._buildEditForm({ ...params, model, stream: true }, inputs);
 
-    this.logger.info(`Streaming edit with ${model}: "${params.prompt.substring(0, 50)}..."`);
+      this.logger.info(`Streaming edit with ${model}: "${params.prompt.substring(0, 50)}..."`);
 
-    yield* this._makeStreamRequest<ImageEditStreamEvent>(ENDPOINTS.edit, formData, true);
+      yield* this._makeStreamRequest<ImageEditStreamEvent>(
+        ENDPOINTS.edit,
+        { kind: 'multipart', form },
+        { rateLimited: true }
+      );
+    } finally {
+      await this._closeEditInputs(inputs);
+    }
   }
 
   /**
@@ -836,7 +977,12 @@ export class OpenAIImageAPI {
    * @param params - Edit parameters plus `partial_images`
    * @param handlers - Optional `onPartialImage` callback
    * @returns The completed image as an ImageResponse
-   * @throws Error If the stream ends without a completed event
+   * @throws OpenAIImageAPIError With `type: 'stream_error'` if the stream ends without a completed event
+   * @example
+   * const edited = await api.generateImageEditStream(
+   *   { image: 'photo.png', prompt: 'make it autumn', partial_images: 1 },
+   *   { onPartialImage: (e) => console.log(`preview ${e.partial_image_index}`) }
+   * );
    */
   async generateImageEditStream(params: StreamEditImageParams, handlers: StreamHandlers = {}): Promise<ImageResponse> {
     for await (const event of this.streamImageEdit(params)) {
@@ -872,6 +1018,9 @@ export class OpenAIImageAPI {
    *   `output_format`, then png.
    * @returns Array of saved file paths
    * @throws Error If outputDir contains a `..` segment or baseFilename is not a single component
+   * @example
+   * const paths = await api.saveImages(result, './renders', 'lighthouse');
+   * // n=1 → ['./renders/lighthouse.png']; n=3 → lighthouse_1.png, _2, _3
    */
   async saveImages(
     response: ImageResponse,
@@ -885,8 +1034,7 @@ export class OpenAIImageAPI {
     const savedPaths: string[] = [];
 
     for (const [i, imageData] of response.data.entries()) {
-      const filename =
-        response.data.length > 1 ? `${baseFilename}_${i + 1}.${ext}` : `${baseFilename}.${ext}`;
+      const filename = response.data.length > 1 ? `${baseFilename}_${i + 1}.${ext}` : `${baseFilename}.${ext}`;
       const filepath = path.join(safeDir, filename);
 
       if (!imageData.b64_json) {

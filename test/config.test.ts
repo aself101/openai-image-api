@@ -185,10 +185,26 @@ describe('Configuration', () => {
       );
     });
 
+    it('README model table should carry the same shutdown dates as MODEL_DEPRECATIONS', async () => {
+      const fs = await import('fs/promises');
+      const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+      for (const [model, dep] of Object.entries(MODEL_DEPRECATIONS)) {
+        const row = readme
+          .split('\n')
+          .find((l) => new RegExp(`^\\| \`${model.replace(/\./g, '\\.')}\`\\s+\\|`).test(l));
+        expect(row, `README row for ${model}`).toBeDefined();
+        expect(row).toContain(`Shutdown ${dep.shutdown}`);
+      }
+      // and no other date claims to be a shutdown
+      const claimed = [...readme.matchAll(/Shutdown (\d{4}-\d{2}-\d{2})/g)].map((m) => m[1]);
+      const known = new Set(Object.values(MODEL_DEPRECATIONS).map((d) => d.shutdown));
+      for (const c of claimed) expect(known.has(c), `README shutdown date ${c}`).toBe(true);
+    });
+
     it('should point every deprecated model at a live replacement', () => {
       for (const dep of Object.values(MODEL_DEPRECATIONS)) {
         expect(dep).toBeDefined();
-        expect(getModelDeprecation(dep!.replacement)).toBeNull();
+        expect(getModelDeprecation(dep.replacement)).toBeNull();
       }
     });
   });
@@ -284,6 +300,12 @@ describe('Configuration', () => {
       expect(validateFlexibleSize('1024x', rule).join()).toMatch(/WIDTHxHEIGHT/);
     });
 
+    it('should name the expected argument when handed a model id instead of a rule', () => {
+      expect(() => validateFlexibleSize('1000x1000', 'gpt-image-2' as unknown as typeof rule)).toThrow(
+        /expects a FlexibleSizeConstraint.*got "gpt-image-2"/
+      );
+    });
+
     it('should report multiple violations at once', () => {
       // odd multiple, over-wide, over-ratio
       const errors = validateFlexibleSize('4000x1000', rule);
@@ -354,12 +376,12 @@ describe('Configuration', () => {
 
     it('should reject output_compression without jpeg/webp', () => {
       expect(validateModelParams('gpt-image-2.5-flare', { output_compression: 50 }).valid).toBe(false);
-      expect(
-        validateModelParams('gpt-image-2.5-flare', { output_compression: 50, output_format: 'png' }).valid
-      ).toBe(false);
-      expect(
-        validateModelParams('gpt-image-2.5-flare', { output_compression: 50, output_format: 'jpeg' }).valid
-      ).toBe(true);
+      expect(validateModelParams('gpt-image-2.5-flare', { output_compression: 50, output_format: 'png' }).valid).toBe(
+        false
+      );
+      expect(validateModelParams('gpt-image-2.5-flare', { output_compression: 50, output_format: 'jpeg' }).valid).toBe(
+        true
+      );
     });
 
     it('should reject output_compression outside 0-100', () => {
@@ -392,19 +414,17 @@ describe('Configuration', () => {
     });
 
     it('should reject invalid moderation and background values', () => {
-      expect(
-        validateModelParams('gpt-image-2.5-flare', { moderation: 'none' as unknown as 'auto' }).valid
-      ).toBe(false);
-      expect(
-        validateModelParams('gpt-image-2.5-flare', { background: 'blue' as unknown as 'auto' }).valid
-      ).toBe(false);
+      expect(validateModelParams('gpt-image-2.5-flare', { moderation: 'none' as unknown as 'auto' }).valid).toBe(false);
+      expect(validateModelParams('gpt-image-2.5-flare', { background: 'blue' as unknown as 'auto' }).valid).toBe(false);
     });
 
     it('should return error for unknown model', () => {
       const result = validateModelParams('dall-e-3', { prompt: 'x' });
       expect(result.valid).toBe(false);
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0]).toMatch(/^Unknown model "dall-e-3"\. Supported: gpt-image-2\.5-sunburst, .*dated snapshots\)$/);
+      expect(result.errors[0]).toMatch(
+        /^Unknown model "dall-e-3"\. Supported: gpt-image-2\.5-sunburst, .*dated snapshots\)$/
+      );
     });
 
     it('should validate snapshots with the family constraints', () => {

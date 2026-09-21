@@ -211,6 +211,19 @@ describe('Utility Functions', () => {
     });
   });
 
+  describe('decodeBase64Image path rule', () => {
+    it('should refuse a .. segment and return the resolved path otherwise', async () => {
+      await expect(decodeBase64Image('aGk=', `${TEST_DIR}/../escape.png`)).rejects.toThrow('Path traversal');
+      const out = await decodeBase64Image('aGk=', path.join(TEST_DIR, 'ok.png'));
+      expect(path.isAbsolute(out)).toBe(true);
+      expect(out.endsWith('ok.png')).toBe(true);
+    });
+
+    it('writeToFile should refuse a .. segment too', async () => {
+      await expect(writeToFile({ a: 1 }, `${TEST_DIR}/../x.json`)).rejects.toThrow('Path traversal');
+    });
+  });
+
   describe('decodeBase64Image', () => {
     it('should decode base64 and save image', async () => {
       const filepath = path.join(TEST_DIR, 'decoded.png');
@@ -255,8 +268,23 @@ describe('Utility Functions', () => {
 
     it('should accept a WebP header', async () => {
       const filepath = path.join(TEST_DIR, 'ok.webp');
-      await fs.writeFile(filepath, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 '), Buffer.alloc(8)]));
+      await fs.writeFile(
+        filepath,
+        Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 '), Buffer.alloc(8)])
+      );
       await expect(validateImagePath(filepath)).resolves.toBe(filepath);
+    });
+
+    it('should report permission denied for an unreadable file', async () => {
+      if (process.platform === 'win32' || process.getuid?.() === 0) return; // chmod semantics differ / root ignores mode
+      const filepath = path.join(TEST_DIR, 'locked.png');
+      await fs.writeFile(filepath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]));
+      await fs.chmod(filepath, 0o000);
+      try {
+        await expect(validateImagePath(filepath)).rejects.toThrow(`Permission denied reading image file: ${filepath}`);
+      } finally {
+        await fs.chmod(filepath, 0o600);
+      }
     });
 
     it('should name a directory as such', async () => {
@@ -270,7 +298,7 @@ describe('Utility Functions', () => {
       await ensureDirectory(TEST_DIR);
 
       // Create a valid PNG file (PNG magic bytes: 89 50 4E 47)
-      const pngHeader = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+      const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
       await fs.writeFile(testFile, pngHeader);
 
       await expect(validateImagePath(testFile)).resolves.toBe(testFile);
@@ -281,15 +309,14 @@ describe('Utility Functions', () => {
       await ensureDirectory(TEST_DIR);
 
       // Create a valid JPEG file (JPEG magic bytes: FF D8 FF)
-      const jpegHeader = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]);
+      const jpegHeader = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
       await fs.writeFile(testFile, jpegHeader);
 
       await expect(validateImagePath(testFile)).resolves.toBe(testFile);
     });
 
     it('should reject non-existent files', async () => {
-      await expect(validateImagePath('/nonexistent/file.png'))
-        .rejects.toThrow('Image file not found');
+      await expect(validateImagePath('/nonexistent/file.png')).rejects.toThrow('Image file not found');
     });
 
     it('should reject empty files', async () => {
@@ -297,8 +324,7 @@ describe('Utility Functions', () => {
       await ensureDirectory(TEST_DIR);
       await fs.writeFile(testFile, Buffer.alloc(0));
 
-      await expect(validateImagePath(testFile))
-        .rejects.toThrow('Image file is empty');
+      await expect(validateImagePath(testFile)).rejects.toThrow('Image file is empty');
     });
 
     it('should reject non-image files', async () => {
@@ -306,8 +332,7 @@ describe('Utility Functions', () => {
       await ensureDirectory(TEST_DIR);
       await fs.writeFile(testFile, 'This is not an image');
 
-      await expect(validateImagePath(testFile))
-        .rejects.toThrow('does not appear to be a valid image');
+      await expect(validateImagePath(testFile)).rejects.toThrow('does not appear to be a valid image');
     });
   });
 
@@ -368,9 +393,7 @@ describe('Utility Functions', () => {
     };
 
     it('should parse event and data fields from a single chunk', async () => {
-      const events = await collect(
-        Readable.from(['event: image_generation.completed\ndata: {"a":1}\n\n'])
-      );
+      const events = await collect(Readable.from(['event: image_generation.completed\ndata: {"a":1}\n\n']));
       expect(events).toEqual([{ event: 'image_generation.completed', data: '{"a":1}' }]);
     });
 
@@ -460,7 +483,6 @@ describe('Utility Functions', () => {
     });
   });
 
-
   describe('Security: validateOutputPath', () => {
     it('should accept valid absolute paths', () => {
       const result = validateOutputPath('/tmp/output');
@@ -474,8 +496,7 @@ describe('Utility Functions', () => {
     });
 
     it('should reject paths with .. traversal sequences', () => {
-      expect(() => validateOutputPath('/tmp/../etc/passwd'))
-        .toThrow('Path traversal sequences (..) are not allowed');
+      expect(() => validateOutputPath('/tmp/../etc/passwd')).toThrow('Path traversal sequences (..) are not allowed');
     });
 
     it('should accept directory names that merely contain two dots', () => {
@@ -488,8 +509,7 @@ describe('Utility Functions', () => {
     });
 
     it('should reject paths with embedded .. sequences', () => {
-      expect(() => validateOutputPath('/tmp/foo/../../etc'))
-        .toThrow('Path traversal sequences (..) are not allowed');
+      expect(() => validateOutputPath('/tmp/foo/../../etc')).toThrow('Path traversal sequences (..) are not allowed');
     });
 
     it('should validate paths stay within base path when provided', () => {
@@ -499,8 +519,9 @@ describe('Utility Functions', () => {
 
     it('should reject paths that escape base path', () => {
       // Even without .., a path outside base should be rejected
-      expect(() => validateOutputPath('/etc/passwd', '/home/user/project'))
-        .toThrow('Output path must be within /home/user/project');
+      expect(() => validateOutputPath('/etc/passwd', '/home/user/project')).toThrow(
+        'Output path must be within /home/user/project'
+      );
     });
   });
 });

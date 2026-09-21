@@ -26,7 +26,7 @@ const logger: Logger = winston.createLogger({
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.printf(({ timestamp, level, message }) => {
-      return `${timestamp} - ${level.toUpperCase()} - ${message}`;
+      return `${String(timestamp)} - ${level.toUpperCase()} - ${String(message)}`;
     })
   ),
   transports: [new winston.transports.Console()],
@@ -74,20 +74,41 @@ export function getErrorCode(error: unknown): string | undefined {
   return undefined;
 }
 
+/** An input image that has passed the pre-upload checks, held open for upload */
+export interface ValidatedImage {
+  /** Open read handle; upload from this, not from the path, so the bytes checked are the bytes sent */
+  handle: fs.FileHandle;
+  /** Size in bytes (from the same open handle) */
+  size: number;
+  /** Detected media type from the magic bytes */
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+  /** Header-safe multipart filename derived from the path */
+  filename: string;
+  /** The path as supplied, for messages */
+  path: string;
+}
+
 /**
- * Validate that a file exists, is non-empty, is within a size limit, and
+ * Open an input image and check it is non-empty, within the size limit, and
  * carries the magic bytes of a format the Image API accepts (PNG, JPEG, WebP).
  *
- * Only the first 12 bytes are read: a 50 MB input costs one small read, not a
- * whole-file buffer per image. GIF is not accepted — the API's documented
- * input formats are png, webp, jpg.
+ * The handle is returned OPEN so the caller can upload from it. Doing the
+ * check and the read on one descriptor closes the window in which a path
+ * could be swapped between validation and upload. The caller owns the handle:
+ * close it, or read it to the end through a stream created with autoClose.
+ *
+ * Only the first 12 bytes are read for the check. GIF is not accepted — the
+ * API's documented input formats are png, webp, jpg.
  *
  * @param filepath - Path to image file
  * @param maxSize - Maximum file size in bytes (default 50 MB, the API limit)
- * @returns The validated filepath
- * @throws Error If the file is missing, unreadable, empty, too large, or not an image
+ * @returns The open, validated image
+ * @throws Error If the file is missing, unreadable, a directory, empty, too large, or not an image
  */
-export async function validateImagePath(filepath: string, maxSize: number = 50 * 1024 * 1024): Promise<string> {
+export async function openValidatedImage(
+  filepath: string,
+  maxSize: number = 50 * 1024 * 1024
+): Promise<ValidatedImage> {
   let handle: fs.FileHandle | undefined;
   try {
     handle = await fs.open(filepath, 'r');
@@ -105,15 +126,25 @@ export async function validateImagePath(filepath: string, maxSize: number = 50 *
     const { bytesRead } = await handle.read(header, 0, 12, 0);
     const magic = header.subarray(0, bytesRead);
 
-    const isPNG = magic.length >= 4 && magic[0] === 0x89 && magic[1] === 0x50 && magic[2] === 0x4e && magic[3] === 0x47;
-    const isJPEG = magic.length >= 3 && magic[0] === 0xff && magic[1] === 0xd8 && magic[2] === 0xff;
-    const isWebP = magic.length >= 12 && magic.subarray(0, 4).toString() === 'RIFF' && magic.subarray(8, 12).toString() === 'WEBP';
-
-    if (!isPNG && !isJPEG && !isWebP) {
+    let mimeType: ValidatedImage['mimeType'] | undefined;
+    if (magic.length >= 4 && magic[0] === 0x89 && magic[1] === 0x50 && magic[2] === 0x4e && magic[3] === 0x47) {
+      mimeType = 'image/png';
+    } else if (magic.length >= 3 && magic[0] === 0xff && magic[1] === 0xd8 && magic[2] === 0xff) {
+      mimeType = 'image/jpeg';
+    } else if (
+      magic.length >= 12 &&
+      magic.subarray(0, 4).toString() === 'RIFF' &&
+      magic.subarray(8, 12).toString() === 'WEBP'
+    ) {
+      mimeType = 'image/webp';
+    }
+    if (!mimeType) {
       throw new Error(`File does not appear to be a valid image (PNG, JPEG, or WebP): ${filepath}`);
     }
 
-    return filepath;
+    const validated: ValidatedImage = { handle, size, mimeType, filename: multipartFilename(filepath), path: filepath };
+    handle = undefined; // ownership passes to the caller
+    return validated;
   } catch (error) {
     const code = getErrorCode(error);
     if (code === 'ENOENT') {
@@ -127,6 +158,32 @@ export async function validateImagePath(filepath: string, maxSize: number = 50 *
   } finally {
     await handle?.close();
   }
+}
+
+/**
+ * Validate that a file exists, is non-empty, is within a size limit, and is a
+ * PNG, JPEG or WebP — then close it. Use openValidatedImage() when the bytes
+ * will be uploaded, so the check and the upload share one descriptor.
+ *
+ * @param filepath - Path to image file
+ * @param maxSize - Maximum file size in bytes (default 50 MB, the API limit)
+ * @returns The validated filepath
+ * @throws Error If the file is missing, unreadable, empty, too large, or not an image
+ */
+export async function validateImagePath(filepath: string, maxSize: number = 50 * 1024 * 1024): Promise<string> {
+  const image = await openValidatedImage(filepath, maxSize);
+  await image.handle.close();
+  return image.path;
+}
+
+/**
+ * Close a validated image's handle, tolerating one that a stream has already
+ * closed (autoClose) — the second close rejects with EBADF and that is fine.
+ *
+ * @param image - The image to release
+ */
+export async function closeValidatedImage(image: ValidatedImage): Promise<void> {
+  await image.handle.close().catch(() => undefined);
 }
 
 /**
@@ -180,17 +237,18 @@ type FileFormat = 'json' | 'txt' | 'binary' | 'auto';
  * Write data to file.
  *
  * @param data - Data to write (Object, Array, Buffer, string, etc.)
- * @param filepath - Path where file should be written
+ * @param filepath - Path where file should be written (no `..` segments)
  * @param fileFormat - Format to use ('json', 'txt', 'binary', 'auto')
+ * @throws Error If the path contains a `..` segment, or a binary write is given a non-Buffer
+ * @example
+ * await writeToFile({ model, prompt, usage }, 'out/render_metadata.json'); // 'auto' → JSON
  */
-export async function writeToFile(
-  data: unknown,
-  filepath: string,
-  fileFormat: FileFormat = 'auto'
-): Promise<void> {
+export async function writeToFile(data: unknown, filepath: string, fileFormat: FileFormat = 'auto'): Promise<void> {
   if (!filepath) {
     throw new Error('Filepath is required');
   }
+  // Same rule as decodeBase64Image: no `..` segment reaches the filesystem
+  validateOutputPath(filepath);
 
   try {
     // Create directory if it doesn't exist
@@ -233,28 +291,29 @@ export async function writeToFile(
 /**
  * Decode base64 image data and save to file.
  *
- * This is the low-level write primitive: `filepath` is written exactly as
- * given, parent directories created as needed, with NO traversal check. It is
- * the caller's job to validate the path (see validateOutputPath and
- * assertSafeBaseFilename) before passing anything derived from untrusted input
- * here; `saveImages()` does that for you.
+ * `filepath` is passed through validateOutputPath first: a `..` segment is
+ * refused, and the returned path is the resolved absolute path that was
+ * written. Callers who build the path from untrusted input still own the
+ * decision of which directory it lands in; `saveImages()` adds the
+ * single-component check on the filename.
  *
  * @param b64Data - Base64 encoded image data
- * @param filepath - Destination file path, already validated by the caller
- * @returns The filepath where image was saved
+ * @param filepath - Destination file path (no `..` segments)
+ * @returns The resolved path the image was written to
+ * @throws Error If the path contains a `..` segment or the write fails
  */
 export async function decodeBase64Image(b64Data: string, filepath: string): Promise<string> {
+  const resolved = validateOutputPath(filepath);
   try {
-    logger.debug(`Decoding base64 image to ${filepath}`);
+    logger.debug(`Decoding base64 image to ${resolved}`);
 
-    const dir = path.dirname(filepath);
-    await ensureDirectory(dir);
+    await ensureDirectory(path.dirname(resolved));
 
     const buffer = Buffer.from(b64Data, 'base64');
-    await fs.writeFile(filepath, buffer);
+    await fs.writeFile(resolved, buffer);
 
-    logger.info(`Saved base64 image: ${filepath}`);
-    return filepath;
+    logger.info(`Saved base64 image: ${resolved}`);
+    return resolved;
   } catch (error) {
     const message = getErrorMessage(error);
     logger.error(`Error decoding base64 image: ${message}`);
@@ -331,13 +390,12 @@ export function promptToFilename(prompt: string, maxLength: number = 50): string
  * @param prompt - The image generation prompt
  * @param model - Model name (e.g. gpt-image-2.5-flare)
  * @param extension - File extension (png, jpg, webp)
- * @returns Timestamped filename
+ * @returns `YYYY-MM-DD_HH-MM-SS-mmm_<4 hex>_<model>_<prompt stem>.<extension>`
+ * @example
+ * generateTimestampedFilename('A cat!', 'gpt-image-2', 'webp');
+ * // → '2026-09-20_22-37-00-123_4f2a_gpt-image-2_a_cat.webp'
  */
-export function generateTimestampedFilename(
-  prompt: string,
-  model: string,
-  extension: string = 'png'
-): string {
+export function generateTimestampedFilename(prompt: string, model: string, extension: string = 'png'): string {
   // ISO 8601 is always "YYYY-MM-DDTHH:MM:SS.mmmZ"; keep date, HH-MM-SS and ms.
   // Millisecond resolution plus a 4-hex random tail keeps two processes that
   // render the same prompt in the same second from overwriting each other.
@@ -473,7 +531,7 @@ export async function* parseSSEStream(
   };
 
   for await (const chunk of stream) {
-    buffer += typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8');
+    buffer += typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
     if (buffer.length > maxEventBytes) {
       stream.destroy();
       throw new Error(`SSE event exceeded ${maxEventBytes} bytes without a delimiter; aborting stream`);
@@ -514,7 +572,7 @@ export async function readStreamToString(stream: Readable, maxBytes: number = 10
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of stream) {
-    const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : (chunk as Buffer);
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
     total += buf.length;
     if (total > maxBytes) {
       throw new Error(`Stream exceeded ${maxBytes} bytes while reading error body`);
