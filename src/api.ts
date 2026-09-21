@@ -665,7 +665,7 @@ export class OpenAIImageAPI {
     }
     if (this.skipValidation) {
       if (!getModelConstraints(model)) {
-        this.logger.warn(`Model ${model} is not in this package's catalogue; sending unvalidated (skipValidation)`);
+        this.logger.warn(`Model ${model} is not in this package's catalogue; sending unvalidated (validation skipped)`);
       }
       return;
     }

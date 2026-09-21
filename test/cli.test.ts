@@ -141,7 +141,7 @@ describe('CLI (dist/cli.js)', () => {
   it('--no-validate lets an unknown model id through the dry-run with a warning', () => {
     const { code, out } = run('--dry-run', '--no-validate', '--model', 'gpt-image-9-2027-01-01', '--prompt', 'a cat');
     expect(code).toBe(0);
-    expect(out).toContain("is not in this package's catalogue; sending unvalidated");
+    expect(out.match(/is not in this package's catalogue; sending unvalidated/g)).toHaveLength(1);
     expect(out).toContain('constraint check skipped (--no-validate)');
     expect(out).toContain('"model": "gpt-image-9-2027-01-01"');
   });

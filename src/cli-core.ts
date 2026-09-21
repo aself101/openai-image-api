@@ -337,7 +337,8 @@ export function resolveModel(options: CLIOptions): ImageModel {
       if (options.validate) {
         throw new Error(`${unknownModelMessage(options.model)}\n  (pass --no-validate to send it to the API anyway)`);
       }
-      logger.warn(`Model ${options.model} is not in this package's catalogue; sending unvalidated (--no-validate)`);
+      // The API class logs the "not in this package's catalogue" warning when
+      // the request is built; warning here too printed it twice.
       // SAFETY: --no-validate is the caller's explicit choice to let the API judge the id
       return options.model as ImageModel;
     }

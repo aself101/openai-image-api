@@ -96,9 +96,10 @@ describe('cli-core', () => {
 
     it('should reject unknown ids unless --no-validate', () => {
       expect(() => resolveModel(opts({ model: 'gpt-image-9' }))).toThrow('pass --no-validate');
+      // No warning here: the API class warns once when it builds the request
       const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
       expect(resolveModel(opts({ model: 'gpt-image-9', validate: false }))).toBe('gpt-image-9');
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("not in this package's catalogue"));
+      expect(warn).not.toHaveBeenCalled();
     });
   });
 
@@ -222,11 +223,11 @@ describe('cli-core', () => {
     });
 
     it('should honour --no-validate on an unknown --model at dry run', async () => {
-      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+      // The catalogue warning is emitted by the API class's own logger; the
+      // subprocess test in test/cli.test.ts asserts it appears exactly once.
       expect(await runCli(argv('--dry-run', '--no-validate', '--model', 'gpt-image-9', '--prompt', 'x'), '3.0.0')).toBe(
         0
       );
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('sending unvalidated'));
     });
   });
 });
