@@ -4,9 +4,9 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import axios from 'axios';
-import { parseTime, renderAssessment, runCostCli } from '../src/cost-cli.js';
+import { parseTime, resolveRange, renderAssessment, runCostCli } from '../src/cost-cli.js';
 import { runCli } from '../src/cli-core.js';
-import { assessImageCosts, type UsagePage, type ImagesUsageResult, type CostsResult } from '../src/cost.js';
+import { assessImageCosts, type UsagePage, type CompletionsUsageResult, type CostsResult } from '../src/cost.js';
 import { logger, setLogLevel } from '../src/utils.js';
 
 vi.mock('axios');
@@ -29,10 +29,23 @@ describe('parseTime', () => {
   });
 });
 
+describe('resolveRange', () => {
+  it('snaps start down and end up to UTC midnight and reports it', () => {
+    const r = resolveRange('2026-09-18T10:00:00Z', 'now', NOW);
+    expect(r).toEqual({
+      start_time: Date.UTC(2026, 8, 18) / 1000,
+      end_time: Date.UTC(2026, 8, 22) / 1000,
+      snapped: true,
+    });
+    expect(resolveRange('7d', 'today', NOW).snapped).toBe(false);
+    expect(() => resolveRange('today', 'yesterday', NOW)).toThrow('--end must be after --start');
+  });
+});
+
 describe('renderAssessment', () => {
-  it('renders the worked example with an unattributed row and a plain-language footer', () => {
-    const T0 = 1730419200;
-    const images: UsagePage<ImagesUsageResult>[] = [
+  it('renders the live flare row with its model line, family totals and lag footer', () => {
+    const T0 = Date.UTC(2026, 8, 20) / 1000;
+    const completions: UsagePage<CompletionsUsageResult>[] = [
       {
         object: 'page',
         has_more: false,
@@ -42,7 +55,18 @@ describe('renderAssessment', () => {
             object: 'bucket',
             start_time: T0,
             end_time: T0 + 86400,
-            results: [{ object: 'organization.usage.images.result', images: 2, num_model_requests: 2 }],
+            results: [
+              {
+                object: 'organization.usage.completions.result',
+                model: 'gpt-image-2.5-flare',
+                num_model_requests: 5,
+                input_tokens: 0,
+                output_tokens: 2183,
+                output_image_tokens: 2183,
+                project_id: 'proj_a',
+                api_key_id: 'key_a',
+              },
+            ],
           },
         ],
       },
@@ -57,16 +81,66 @@ describe('renderAssessment', () => {
             object: 'bucket',
             start_time: T0,
             end_time: T0 + 86400,
-            results: [{ object: 'organization.costs.result', amount: { currency: 'usd', value: 0.06 } }],
+            results: [
+              {
+                object: 'organization.costs.result',
+                amount: { currency: 'usd', value: '0.06549' },
+                line_item: 'gpt-image-2.5-flare image, output',
+                quantity: 2183,
+                quantity_unit: 'tokens',
+                project_id: 'proj_a',
+                api_key_id: 'key_a',
+              },
+            ],
           },
         ],
       },
     ];
-    const text = renderAssessment(assessImageCosts(images, costs, { start_time: T0, end_time: T0 + 86400 }));
-    expect(text).toContain('2024-11-01  org');
-    expect(text).toMatch(/\s2\s+-\s+0\.06 usd\s+0\.06 usd\s+-\s+unattributed/);
-    expect(text).toContain('usd: image-classified 0.00, unclassified 0.06, other 0.00, all-API total 0.06');
-    expect(text).toContain('co-occurrence is not attribution');
+    const text = renderAssessment(
+      assessImageCosts([], completions, costs, { start_time: T0, end_time: T0 + 86400 }),
+      new Date('2026-09-20T18:00:00Z')
+    );
+    expect(text).toContain('2026-09-20 → 2026-09-21 (UTC days');
+    expect(text).toMatch(
+      /2026-09-20\s+proj=proj_a key=key_a\s+5\s+2183\s+0\.06549 usd\s+-\s+0\.06549 usd\s+0\.013098\s+exact_scope_reconciliation/
+    );
+    expect(text).toMatch(/gpt-image-2\.5-flare\s+5\s+2183\s+0\.06549 usd\s+0\.013098\s+img-out 0\.06549/);
+    expect(text).toContain('usd: image-classified 0.06549, unclassified 0.00, other 0.00, all-API total 0.06549');
+    expect(text).toContain('By model family:');
+    expect(text).toContain('The Costs endpoint lags usage');
+    expect(text).not.toContain('* marks a day');
+  });
+
+  it('marks partial days and omits the lag footer for a settled range', () => {
+    const T0 = 1730419200;
+    const text = renderAssessment(
+      assessImageCosts(
+        [],
+        [
+          {
+            object: 'page',
+            has_more: false,
+            next_page: null,
+            data: [
+              {
+                object: 'bucket',
+                start_time: T0,
+                end_time: T0 + 86400,
+                results: [
+                  { object: 'organization.usage.completions.result', model: 'gpt-image-1', num_model_requests: 1 },
+                ],
+              },
+            ],
+          },
+        ],
+        [],
+        { start_time: T0, end_time: T0 + 3600 }
+      ),
+      NOW
+    );
+    expect(text).toMatch(/2024-11-01\*\s+org/);
+    expect(text).toContain('* marks a day');
+    expect(text).not.toContain('lags usage');
   });
 });
 
@@ -115,9 +189,25 @@ describe('runCostCli', () => {
               object: 'bucket',
               start_time: 1730419200,
               end_time: 1730505600,
-              results: url.includes('/usage/images')
-                ? [{ object: 'organization.usage.images.result', images: 2, num_model_requests: 2 }]
-                : [{ object: 'organization.costs.result', amount: { currency: 'usd', value: 0.06 } }],
+              results: url.includes('/usage/completions')
+                ? [
+                    {
+                      object: 'organization.usage.completions.result',
+                      model: 'gpt-image-2',
+                      num_model_requests: 2,
+                      input_tokens: 0,
+                      output_tokens: 0,
+                    },
+                  ]
+                : url.includes('/usage/images')
+                  ? []
+                  : [
+                      {
+                        object: 'organization.costs.result',
+                        amount: { currency: 'usd', value: '0.06' },
+                        line_item: 'gpt-image-2 image, output',
+                      },
+                    ],
             },
           ],
         },
@@ -131,7 +221,7 @@ describe('runCostCli', () => {
     );
     expect(code).toBe(0);
     const printed = JSON.parse(String(log.mock.calls[0]?.[0])) as { rows: Array<{ attribution_level: string }> };
-    expect(printed.rows[0]?.attribution_level).toBe('unattributed');
+    expect(printed.rows[0]?.attribution_level).toBe('image_line_item_reconciliation');
     const fs = await import('fs/promises');
     const written = JSON.parse(await fs.readFile(out, 'utf8')) as { classifier_version: string };
     expect(written.classifier_version).toMatch(/^\d{4}-/);

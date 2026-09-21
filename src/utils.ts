@@ -74,6 +74,42 @@ export function toWinstonLevel(level: string): 'debug' | 'info' | 'warn' | 'erro
 export { logger };
 
 /**
+ * Create a winston logger in the package's format at a package LogLevel.
+ * Both API clients use this so their output is uniform and the level name is
+ * mapped through toWinstonLevel (the WARNING-muted-everything bug lived in
+ * two copies of this code).
+ */
+export function createPackageLogger(level: string): Logger {
+  return winston.createLogger({
+    level: toWinstonLevel(level),
+    format: winston.format.combine(
+      winston.format.timestamp(),
+      winston.format.printf(
+        ({ timestamp, level: lvl, message }) => `${String(timestamp)} - ${lvl.toUpperCase()} - ${String(message)}`
+      )
+    ),
+    transports: [new winston.transports.Console()],
+  });
+}
+
+/**
+ * Refuse a non-HTTPS API base URL. Credentials travel in the Authorization
+ * header; plaintext would expose them.
+ *
+ * @throws Error With a fixed message the clients wrap into their typed error
+ */
+export function assertHttpsBaseUrl(baseUrl: string): void {
+  if (baseUrl && !baseUrl.startsWith('https://')) {
+    throw new Error('API base URL must use HTTPS protocol for security');
+  }
+}
+
+/** Redact a secret for logs: last four characters, or nothing for a short one */
+export function redactKey(key: string): string {
+  return !key || key.length < 8 ? '[REDACTED]' : `sk-...${key.slice(-4)}`;
+}
+
+/**
  * Extract a printable message from whatever was thrown.
  *
  * `catch (error)` binds `unknown` under strict mode; casting it to `Error`

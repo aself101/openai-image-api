@@ -55,7 +55,15 @@ export interface ApiErrorBody {
   type?: string;
 }
 
-/** Read the API error body off an axios rejection, if it carries one */
+/**
+ * Read the API error body off an axios rejection, if it carries one.
+ *
+ * @param error - Anything thrown by an axios call
+ * @returns The `{ message, code, type }` object from `response.data.error`, or undefined when the rejection has no such body
+ * @example
+ * const body = apiErrorBody(err);
+ * if (body?.code === 'invalid_api_key') rotate();
+ */
 export function apiErrorBody(error: unknown): ApiErrorBody | undefined {
   const data = (error as { response?: { data?: unknown } } | null)?.response?.data;
   if (typeof data !== 'object' || data === null) return undefined;

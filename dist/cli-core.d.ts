@@ -59,21 +59,6 @@ export interface CLIOptions {
     examples?: boolean;
 }
 /**
- * Narrow a raw flag value to one of an allowed set, or fail with the set.
- *
- * Commander hands back untyped strings; casting them to the literal unions the
- * API expects would let `--quality bogus` type-check. Membership is checked
- * here so the value is genuinely narrowed. Per-model rules (e.g. `max` only on
- * 2.5) are still enforced by validateModelParams downstream.
- */
-export declare function oneOf<T extends string>(value: unknown, allowed: readonly T[], flag: string): T | undefined;
-/** Read an optional string flag */
-export declare function optString(value: unknown, flag: string): string | undefined;
-/** Read an optional integer flag (commander's parseInt yields NaN on junk) */
-export declare function optInt(value: unknown, flag: string): number | undefined;
-/** Read a repeatable string flag */
-export declare function stringList(value: unknown, flag: string): string[];
-/**
  * Validate commander's untyped option bag into CLIOptions field by field.
  */
 export declare function readOptions(raw: Record<string, unknown>): CLIOptions;

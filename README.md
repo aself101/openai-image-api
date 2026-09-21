@@ -1,11 +1,11 @@
-# OpenAI Image Generation & Editing Service
+# OpenAI Image Generation, Editing & Cost Assessment
 
 [![npm version](https://img.shields.io/npm/v/openai-image-api.svg)](https://www.npmjs.com/package/openai-image-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/openai-image-api)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-247%20passing-brightgreen)](test/)
+[![Tests](https://img.shields.io/badge/tests-295%20passing-brightgreen)](test/)
 
-A Node.js wrapper for the [OpenAI Image API](https://developers.openai.com/api/reference/resources/images) — `/v1/images/generations` and `/v1/images/edits` — for the GPT Image model family: **GPT Image 2.5** (Sunburst, Flare), **GPT Image 2**, and the deprecated GPT Image 1.x models. Generate and edit images, with streaming partial-image delivery, via CLI or programmatic API.
+A Node.js wrapper for the [OpenAI Image API](https://developers.openai.com/api/reference/resources/images) — `/v1/images/generations` and `/v1/images/edits` — for the GPT Image model family: **GPT Image 2.5** (Sunburst, Flare), **GPT Image 2**, and the deprecated GPT Image 1.x models. Generate and edit images, with streaming partial-image delivery, via CLI or programmatic API — and reconcile what those images cost with `openai-img cost`, which joins the organization usage and costs endpoints per day, scope and model.
 
 This service follows the data-collection architecture pattern with organized data storage, logging, parameter validation, and CLI orchestration. Written in **TypeScript** with full type definitions included. Requires **Node.js 18 or newer**.
 
@@ -75,12 +75,16 @@ await api.saveImages(streamed, './out', 'river');
 
 ## Overview
 
-The package wraps the two Image API endpoints:
+The package wraps the two Image API endpoints, and — with an admin key — the three organization endpoints that say what the images cost:
 
-| Endpoint                      | Method                | Streaming variant                                 |
-| ----------------------------- | --------------------- | ------------------------------------------------- |
-| `POST /v1/images/generations` | `generateImage()`     | `streamImage()` / `generateImageStream()`         |
-| `POST /v1/images/edits`       | `generateImageEdit()` | `streamImageEdit()` / `generateImageEditStream()` |
+| Endpoint                                 | Class / method                                          | Streaming variant                                 |
+| ---------------------------------------- | ------------------------------------------------------- | ------------------------------------------------- |
+| `POST /v1/images/generations`            | `OpenAIImageAPI.generateImage()`                        | `streamImage()` / `generateImageStream()`         |
+| `POST /v1/images/edits`                  | `OpenAIImageAPI.generateImageEdit()`                    | `streamImageEdit()` / `generateImageEditStream()` |
+| `GET /v1/organization/usage/completions` | `OpenAIAdminAPI.listCompletionsUsage()`                 | —                                                 |
+| `GET /v1/organization/usage/images`      | `OpenAIAdminAPI.listImagesUsage()`                      | —                                                 |
+| `GET /v1/organization/costs`             | `OpenAIAdminAPI.listCosts()`                            | —                                                 |
+| all three, joined                        | `OpenAIAdminAPI.assessImageCosts()` / `openai-img cost` | —                                                 |
 
 Every request is validated client-side against the model's published constraints (sizes, quality tiers, formats, `n`, `partial_images`, `input_fidelity`) before any network call, so a bad parameter fails fast with a specific message rather than a generic 400.
 
@@ -257,6 +261,7 @@ openai-image-api/
 │   ├── config.ts           # Model constraints, deprecations, validation
 │   ├── utils.ts            # File I/O, image header checks, SSE parser
 │   ├── cli-core.ts         # CLI logic (testable in-process)
+│   ├── cli-options.ts      # Option coercion helpers shared by both CLIs
 │   ├── cost.ts             # Cost assessment algorithm (pure)
 │   ├── admin-api.ts        # OpenAIAdminAPI: paginated usage / costs client
 │   ├── cost-cli.ts         # `openai-img cost` subcommand
@@ -355,6 +360,8 @@ const api = new OpenAIImageAPI({
   skipValidation: false, // true: send unknown models / out-of-table params, let the API judge
 });
 ```
+
+> **`logLevel` in 3.0.0 and earlier:** `'WARNING'` — the documented value and, from 3.0.0, the default — silently muted _every_ log line, errors included (winston has no `warning` level). Fixed in 3.1.0: levels are mapped correctly, and an unrecognised level name now throws instead of muting. If you relied on `WARNING` meaning "quiet", it now means "warnings and errors", which is what it always said. `OpenAIAdminAPI` takes the same option.
 
 ### `validateRequest(params, { streaming? }): Promise<ImageModel>`
 
@@ -505,34 +512,62 @@ console.log(path, edited.usage);
 
 ## Cost Assessment
 
-`openai-img cost` reconciles your organization's **image usage** (`GET /v1/organization/usage/images`, activity counts) with its **costs** (`GET /v1/organization/costs`, dollar amounts) per UTC day and per scope. It needs an **admin key** (`sk-admin-…`, Organization → Admin keys) in `OPENAI_ADMIN_KEY` — a different credential from the project key the image commands use.
+`openai-img cost` reconciles your organization's **image-model usage** with its **costs**, per UTC day, per scope (project × API key) and per model. It needs an **admin key** (`sk-admin-…`, Organization → Admin keys) in `OPENAI_ADMIN_KEY` — a different credential from the project key the image commands use.
 
 ```bash
 export OPENAI_ADMIN_KEY="sk-admin-..."
-openai-img cost --start 7d                           # last seven UTC days to now
-openai-img cost --start 2026-09-01 --end 2026-09-08  # end is exclusive
-openai-img cost --start 30d --project-id proj_abc --json --output costs.json
+openai-img cost --start 7d                                    # last seven UTC days through today
+openai-img cost --start 2026-09-01 --end 2026-09-08           # end is exclusive; both snap to UTC midnight
+openai-img cost --start 30d --project-id proj_abc --api-key-id key_123   # scope filters, repeatable
+openai-img cost --start 7d --json --output costs.json         # full report as JSON, also written to a file
+openai-img cost --start 7d --admin-key sk-admin-... --log-level DEBUG    # key on the command line (visible in ps), verbose
+```
+
+Options: `--start <time>` (required), `--end <time>` (default: end of the current UTC day), `--project-id <id>`, `--api-key-id <id>`, `--json`, `--output <path>`, `--admin-key <key>`, `--log-level DEBUG|INFO|WARNING|ERROR` (default `INFO`). Times are Unix seconds, ISO-8601, `today`, `yesterday`, or `<N>d`.
+
+```text
+day          scope / model                 requests  out img tk    image cost  unclassified     all-API   avg/req  attribution / components
+2026-09-20   proj=proj_… key=key_…               11       26392  0.897799 usd             -  0.897799 usd  0.081618  exact_scope_reconciliation
+               gpt-image-1 [family]               1        4160  0.166505 usd                              0.166505  img-out 0.1664 txt-in 0.000105
+               gpt-image-2.5-flare                5        2183   0.06587 usd                              0.013174  img-out 0.06549 txt-in 0.00038
 ```
 
 ```typescript
 import { OpenAIAdminAPI } from 'openai-image-api';
 
+const end_time = Math.ceil(Date.now() / 1000 / 86400) * 86400; // end of today, UTC
+const start_time = end_time - 7 * 86400;
+
 const admin = new OpenAIAdminAPI(); // reads OPENAI_ADMIN_KEY
 const report = await admin.assessImageCosts({ start_time, end_time }, { project_ids: ['proj_abc'] });
 for (const row of report.rows) {
-  console.log(row.period_start_iso, row.scope, row.image_count, row.classified_image_cost, row.attribution_level);
+  for (const m of row.models) {
+    console.log(
+      row.period_start_iso.slice(0, 10),
+      row.project_id,
+      m.model,
+      m.requests,
+      m.cost.total,
+      m.tokens_reconcile
+    );
+  }
 }
+console.log(report.totals.by_model); // [{ family, currency, requests, output_image_tokens, image_cost }]
 ```
 
-**What it is, and is not.** This is a reconciliation report, not request-level billing. The two endpoints share no request id, and Costs cannot be grouped by model, so:
+**Where the numbers come from.** Three organization endpoints, one query each, every page fetched before anything is computed:
 
-- A cost row counts as **image spend** only on a documented signal — its `quantity_unit` is `images`, or its `line_item` is in the package's versioned exact-match list (empty until real values are observed; `observed_line_items` in the output shows what your org's rows actually say). Everything else is **unclassified** and stays visible. Cost that merely lands on the same day as image activity is _not_ attributed to it.
-- Scopes join only where both endpoints carry the same **known** project and API-key ids. A row with `null` project/key is organization scope; it is never copied onto projects.
-- `average_cost_per_image` is computed only at an exact project + API-key scope with image-classified cost and image activity on both sides. It is a blended figure for that scope and day, not a per-model price.
-- Amounts are summed as integer micro-units per currency — no floating-point drift, currencies never mixed.
-- Every row carries `attribution_level` (`exact_scope_reconciliation` → `image_line_item_reconciliation` → `shared_scope_estimate` → `unattributed`), `warnings`, the raw `line_items`, an `image_breakdown` by model/size/source/user, and `provenance` back to the source pages.
+- `GET /v1/organization/usage/completions` grouped by project, API key and **model** — GPT Image activity lives here (`num_model_requests`, `input_image_tokens`, `output_image_tokens`, …). Non-image models are dropped and counted.
+- `GET /v1/organization/usage/images` — DALL-E-era `image.generation/edit/variation` activity. Empty for an organization that only uses GPT Image; still read.
+- `GET /v1/organization/costs` grouped by project, API key and **line item**, with no line-item filter so unmatched spend stays visible.
 
-The pure algorithm is `assessImageCosts(imagePages, costPages, range)` from `openai-image-api/cost`; the paginating client is `OpenAIAdminAPI` from `openai-image-api/admin` (also re-exported from the main entry). Both endpoints are fetched to the last page before anything is computed; a partial page set is refused. Spec: `docs/openai-image-cost-assessment-spec.md`.
+**How rows are classified and joined.** A cost row is **image spend** when its `quantity_unit` is `images`, or its `line_item` parses as `<model> <image|text>, <input|cached input|output>` and the model is an image model (`gpt-image-*`, `dall-e-*`). That structured line item — `gpt-image-2.5-flare image, output`, quantity in tokens — is what OpenAI emits today (observed 2026-09-21), and it names the model, so **model-level cost is reported**: within a day and scope, cost rows join usage rows by model id (exactly, else by family across a `-YYYY-MM-DD` snapshot suffix, labelled `[family]`). Usage token counts are compared with the cost-side `quantity` component by component (`tokens_reconcile`). Everything the parser does not recognise is **unclassified** and stays visible; cost that merely lands on the same day as activity is never attributed to it.
+
+**What a row carries.** `attribution_level` (`exact_scope_reconciliation` → `image_line_item_reconciliation` → `shared_scope_estimate` → `unattributed`), `partial` (the day runs past the requested end), `classified_image_cost` / `unclassified_cost` / `total_cost` (all API products at that scope), `average_cost_per_request` and `average_cost_per_image` (exact scope only), `excluded_foreign_currency` (rows in another currency, excluded atomically from every total), `models[]` with per-component cost and token counts, the raw `line_items`, an `image_breakdown`, `warnings`, and `provenance` back to the source pages. Amounts are parsed from their decimal text (the API sends 34 significant digits) into integers at 12 decimal places; currencies are never mixed.
+
+**Costs lag usage.** The current UTC day shows activity within minutes and cost hours later; a model with usage and no cost is `activity_only` with a re-run notice, never $0. Both endpoints bucket at UTC midnight, so the CLI snaps `--start` down and `--end` up and prints the effective range.
+
+**Building blocks.** From `openai-image-api/cost`: `assessImageCosts(imagePages, completionPages, costPages, range)` — the pure algorithm (this one, plus `OpenAIAdminAPI` and every cost type, is also on the main entry); `normalizeCompletions` / `normalizeImages` / `normalizeCosts` — page sets to typed rows (they refuse a page set with a gap); `parseLineItem`, `classifyCostRow`, `modelFamily`, `isImageModel`; `toScaled` / `formatAmount` / `AMOUNT_SCALE` — exact money. From `openai-image-api/admin`: `OpenAIAdminAPI` with `listCompletionsUsage`, `listImagesUsage`, `listCosts` (all pages, retried on 429/5xx with backoff, amounts kept as text), `assessImageCosts`, and the `USAGE_LIMITS` / `COSTS_LIMITS` bounds. Spec and the dated revision that records the live findings: `docs/openai-image-cost-assessment-spec.md`; endpoint references in `docs/reference/`.
 
 ## Data Organization
 
@@ -601,17 +636,17 @@ npm run format:check    # prettier
 npm run verify          # lint + format + type-check (src and tests) + build + test, what CI runs
 ```
 
-The suite has 247 tests across five files:
+The suite has 295 tests across seven files:
 
 - **config** — model catalogue and deprecation table, flexible-size rules (multiples of 16, aspect ratio, pixel bounds), per-model quality gating, `input_fidelity` rejection, cross-field rules (transparent+jpeg, compression without jpeg/webp), snapshot resolution.
 - **api** — request payloads per model family, default model, deprecation warning once per model, streaming (SSE reassembly across chunk boundaries, event ordering, callback wrapper, error-body recovery from a failed stream, terminal error events), edit pre-flight, `saveImages`, security (HTTPS enforcement, key redaction, production error sanitisation, rate limiting).
 - **utils** — file I/O, filename generation, image magic-byte validation, path traversal, error-message extraction, SSE parser edge cases (CRLF, multi-line data, comments, trailing event, 200 kB payloads).
 - **cli-core** — in-process tests of the CLI logic (`src/cli-core.ts`): option parsing and enum checks, model resolution, cross-flag validation, job construction, `runCli` exit codes for dry runs and batch failures.
-- **cost** — money arithmetic, classification, normalization, the spec's worked example, scope joins (known never matches unknown), cost-only / image-only buckets, double-count guard, currency isolation, admin-client pagination and auth errors.
-- **cost-cli** — time parsing, text rendering, routed failure paths, `--json` / `--output`.
+- **cost** — exact decimal parsing (34-digit wire amounts, `0E-6176`, half-up at the 13th place), line-item parsing and classification, completions/images/costs normalization, page-gap detection, the live 2026-09-20 fixture (5 requests / 2183 tokens ↔ $0.06549), token mismatch, family match across a snapshot suffix, one-sided models, component sums, unclassified spend, atomic foreign-currency exclusion, scope isolation, DALL-E-era images path, partial days, ordering, provenance; admin client pagination, shape check, retry/backoff (429/5xx retried, 400 not), auth errors, amount-text preservation.
+- **cost-cli** — time parsing, UTC-day range snapping, text rendering (model lines, family totals, partial marker, lag footer), routed failure paths, `--json` / `--output`.
 - **cli** — subprocess smoke tests against the built `dist/cli.js`: `--dry-run` validation failures exit non-zero with the validator's message, `--model` rejects removed ids, invalid enum flags are refused before any request.
 
-Network calls are mocked. Live verification of streaming, editing, and the `input_fidelity` behaviour was performed against the real API on 2026-09-20 and again from the published 3.0.0 tarball on 2026-09-21; it is not part of `npm test`.
+Network calls are mocked. Live verification of streaming, editing, and the `input_fidelity` behaviour was performed against the real API on 2026-09-20 and again from the published 3.0.0 tarball on 2026-09-21; `openai-img cost` was run live on 2026-09-21 against an organization with GPT Image spend (7 model-rows across four families, every one reconciling usage tokens to cost quantity). None of that is part of `npm test`.
 
 ## Error Handling
 
@@ -619,6 +654,8 @@ Every failure thrown by `OpenAIImageAPI` methods is an `OpenAIImageAPIError` (ex
 
 ```typescript
 import { OpenAIImageAPI, OpenAIImageAPIError } from 'openai-image-api'; // also: openai-image-api/errors
+// openai-image-api/errors also exports apiErrorBody(err): the parsed { message, code, type } of an OpenAI
+// error response, or undefined — the helper the package uses to fill code/type/apiMessage below.
 
 try {
   await api.generateImage({ prompt });
@@ -719,7 +756,7 @@ Other behaviour changes:
 - **Batch exit code.** A `--prompt` batch with any failed prompt now exits 1 and lists the failures; 2.x printed the success banner and exited 0 even when every prompt failed.
 - **Rate limiting** is serialized across concurrent calls on one instance; 2.x spaced only sequential callers.
 - Errors are `OpenAIImageAPIError` instances with `status`/`code`/`type`/`apiMessage`/`cause`; messages are unchanged.
-- **Library log level defaults to `WARNING`** (was `INFO`): `new OpenAIImageAPI()` no longer writes a progress line to stdout on every request. Pass `logLevel: 'INFO'` to restore. The CLI is unchanged (`--log-level`, default INFO).
+- **Library log level defaults to `WARNING`** (was `INFO`): `new OpenAIImageAPI()` no longer writes a progress line to stdout on every request. Pass `logLevel: 'INFO'` to restore. The CLIs are unchanged (`--log-level`, default INFO). Note that in 3.0.0 itself `WARNING` muted everything — see the `logLevel` note under [API Methods](#api-methods).
 - **Bounded buffers.** Buffered responses are capped at 256 MiB (`maxContentLength`/`maxBodyLength`) and a single SSE event at 128 MiB; both are far above any real image and exist so a hostile or broken upstream cannot exhaust memory.
 - Removed utilities: `validateImageUrl`, `downloadImage`, `imageToBase64`, `validateImageFile`, `pause` (`openai-image-api/utils`). The first three served DALL-E URL responses; the package no longer fetches anything but the API itself. `RequestOptions` and `ImageFileConstraints` types are gone with them.
 
@@ -732,12 +769,12 @@ npm run verify                       # lint, format, type-check src + tests, bui
 npm run check:reference              # config still matches OpenAI's published reference
 # edit CHANGELOG.md: move [Unreleased] under a new version heading with today's date
 npm version <major|minor|patch> -m "chore(release): %s"   # bumps package.json, commits, tags v<version>
+git push origin main --follow-tags   # wait for CI to go green on the release commit
 npm publish                          # prompts for the npm one-time password
-git push origin main --follow-tags
 gh release create v<version> --notes-from-tag  # optional
 ```
 
-`prepublishOnly` rebuilds `dist/` before the tarball is made; the committed `dist/` must already match (`git diff --exit-code dist/` after `npm run build`) or CI on the release commit fails. Check the tarball once with `npm pack --dry-run`: `dist/`, `src/`, `README.md`, `LICENSE`, nothing else.
+`prepublishOnly` runs `npm run check:release` and then rebuilds `dist/`. The check refuses to publish when the CHANGELOG has no heading for `package.json`'s version, when `[Unreleased]` still holds entries, when the committed `dist/` differs from a fresh build, or when `npm pack` would ship anything besides `dist/`, `src/`, `README.md`, `LICENSE` and `package.json`. `npm run check:release -- --control` proves it can fail. Publish after CI is green on the pushed release commit, not before: a tag that fails CI after the tarball is on npm cannot be un-published cleanly.
 
 ## Additional Resources
 

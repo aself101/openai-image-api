@@ -27,7 +27,6 @@ import axios, { type AxiosResponse } from 'axios';
 import FormData from 'form-data';
 import path from 'path';
 import { Readable } from 'stream';
-import winston from 'winston';
 import {
   getOpenAIApiKey,
   BASE_URL,
@@ -48,7 +47,9 @@ import {
   validateOutputPath,
   assertSafeBaseFilename,
   getErrorMessage,
-  toWinstonLevel,
+  createPackageLogger,
+  assertHttpsBaseUrl,
+  redactKey,
   type ValidatedImage,
 } from './utils.js';
 import type {
@@ -167,23 +168,12 @@ export class OpenAIImageAPI {
     requestTimeout = DEFAULT_REQUEST_TIMEOUT,
     skipValidation = false,
   }: APIOptions = {}) {
-    // Setup logging
-    this.logger = winston.createLogger({
-      level: toWinstonLevel(logLevel),
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.printf(({ timestamp, level, message }) => {
-          return `${String(timestamp)} - ${level.toUpperCase()} - ${String(message)}`;
-        })
-      ),
-      transports: [new winston.transports.Console()],
-    });
+    this.logger = createPackageLogger(logLevel);
 
-    // Validate baseUrl uses HTTPS
-    if (baseUrl && !baseUrl.startsWith('https://')) {
-      throw new OpenAIImageAPIError('API base URL must use HTTPS protocol for security', {
-        type: 'configuration_error',
-      });
+    try {
+      assertHttpsBaseUrl(baseUrl);
+    } catch (error) {
+      throw new OpenAIImageAPIError(getErrorMessage(error), { type: 'configuration_error' });
     }
 
     // Set API key
@@ -222,10 +212,7 @@ export class OpenAIImageAPI {
    * @returns Redacted API key showing only last 4 characters
    */
   private _redactApiKey(apiKey: string): string {
-    if (!apiKey || apiKey.length < 8) {
-      return '[REDACTED]';
-    }
-    return `sk-...${apiKey.slice(-4)}`;
+    return redactKey(apiKey);
   }
 
   /**

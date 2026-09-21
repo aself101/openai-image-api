@@ -14,18 +14,43 @@ heading at release time.
 
 ### Added
 
-- **Cost assessment.** `openai-img cost --start <time> [--end <time>] [--project-id …] [--api-key-id …] [--json] [--output <file>]`
-  and `OpenAIAdminAPI.assessImageCosts(range, filters)` reconcile the organization
-  Images-usage endpoint (activity counts) with the Costs endpoint (amounts) per
-  UTC day and scope. Needs an admin key in `OPENAI_ADMIN_KEY`. Attribution is
-  conservative by construction: a cost row is image spend only when its
-  `quantity_unit` is `images` or its `line_item` is in a versioned exact-match
-  list; scopes join only on known, equal project + API-key ids; amounts are
-  integer micro-units per currency; every row carries its attribution level,
-  warnings, raw line items, an image breakdown and provenance. Pure algorithm at
-  `openai-image-api/cost`, paginating client at `openai-image-api/admin`,
-  `OpenAIImageAPIError` also at `openai-image-api/errors`. Spec:
+- **Cost assessment.** `openai-img cost --start <time> [--end <time>] [--project-id …]
+  [--api-key-id …] [--json] [--output <file>] [--admin-key …] [--log-level …]` and
+  `OpenAIAdminAPI.assessImageCosts(range, filters)` reconcile organization
+  **usage** with organization **costs** per UTC day, scope (project × API key)
+  and **model**. Needs an admin key in `OPENAI_ADMIN_KEY`. Three endpoints are
+  read to the last page: `usage/completions` (where GPT Image activity is
+  reported, grouped by model), `usage/images` (DALL-E-era activity) and `costs`
+  (grouped by line item, unfiltered so unmatched spend stays visible). A cost
+  row is image spend when its `quantity_unit` is `images` or its line item
+  parses as `<model> <image|text>, <input|cached input|output>` with an image
+  model — the form OpenAI emits today — and because that names the model, cost
+  rows join usage rows by model id within a day and scope (exact, else by
+  family across a `-YYYY-MM-DD` snapshot suffix, labelled). Usage token counts
+  are compared with cost quantities per component (`tokens_reconcile`; 7/7
+  model-rows matched to the token in the live run of 2026-09-21). Everything
+  the parser does not recognise is unclassified and visible; co-occurrence is
+  never attribution; a null project/key is organization scope and never copied
+  onto projects. Amounts are parsed from their decimal text (the API sends 34
+  digits) into integers at 12 decimal places; a row in a foreign currency is
+  excluded from every total at its scope atomically and listed. Each row
+  carries `attribution_level`, `partial`, `models[]` (per-component cost,
+  tokens, averages, match kind), raw `line_items`, `image_breakdown`,
+  `warnings` and `provenance`; the report carries `observed_line_items`,
+  `observed_models`, and totals per currency and per model family. The CLI
+  snaps the range to UTC days and prints the effective range, marks partial
+  days, and notes that costs lag usage. Pure algorithm and primitives at
+  `openai-image-api/cost`; paginating, retrying client at
+  `openai-image-api/admin`; `OpenAIImageAPIError` and `apiErrorBody` at
+  `openai-image-api/errors`. Spec with the dated live-findings revision:
   `docs/openai-image-cost-assessment-spec.md`.
+- `openai-image-api/utils` gains `createPackageLogger`, `toWinstonLevel`,
+  `assertHttpsBaseUrl` and `redactKey` — the helpers both API classes share.
+- `npm run check:release` (also run by `prepublishOnly`): refuses a publish
+  whose CHANGELOG lacks a heading for the version, whose `[Unreleased]` still
+  holds entries, whose committed `dist/` differs from a fresh build, or whose
+  tarball would ship anything outside `dist/`, `src/`, `README.md`, `LICENSE`,
+  `package.json`. `--control` proves it can fail.
 
 ### Fixed
 
@@ -34,7 +59,14 @@ heading at release time.
   documented since 1.0 and became the library default in 3.0.0, so 3.0.0's
   deprecation warnings and error logs never reached stdout. Level names are
   now mapped (`WARNING` → `warn`) through one function and an unknown name
-  throws instead of muting. Tests assert on transport output, not on spies.
+  throws instead of muting. Tests assert on what the transport receives, so a
+  muted level fails them.
+
+### Removed
+
+- `.npmignore`, which contradicted `package.json#files` (the latter governs and
+  had since 3.0.0; the file was inert). Tarball contents are now asserted by
+  `check:release` instead of described twice.
 
 ## [3.0.0] - 2026-09-21
 

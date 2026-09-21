@@ -39,6 +39,22 @@ export declare function toWinstonLevel(level: string): 'debug' | 'info' | 'warn'
 /** Module-level logger shared by the CLI and utilities; level set via setLogLevel */
 export { logger };
 /**
+ * Create a winston logger in the package's format at a package LogLevel.
+ * Both API clients use this so their output is uniform and the level name is
+ * mapped through toWinstonLevel (the WARNING-muted-everything bug lived in
+ * two copies of this code).
+ */
+export declare function createPackageLogger(level: string): Logger;
+/**
+ * Refuse a non-HTTPS API base URL. Credentials travel in the Authorization
+ * header; plaintext would expose them.
+ *
+ * @throws Error With a fixed message the clients wrap into their typed error
+ */
+export declare function assertHttpsBaseUrl(baseUrl: string): void;
+/** Redact a secret for logs: last four characters, or nothing for a short one */
+export declare function redactKey(key: string): string;
+/**
  * Extract a printable message from whatever was thrown.
  *
  * `catch (error)` binds `unknown` under strict mode; casting it to `Error`

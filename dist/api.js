@@ -26,10 +26,9 @@ import axios from 'axios';
 import FormData from 'form-data';
 import path from 'path';
 import { Readable } from 'stream';
-import winston from 'winston';
 import { getOpenAIApiKey, BASE_URL, ENDPOINTS, DEFAULT_MODEL, validateModelParams, getModelConstraints, getModelDeprecation, deprecationNotice, } from './config.js';
 import { OpenAIImageAPIError, apiErrorBody } from './errors.js';
-import { decodeBase64Image, parseSSEStream, readStreamToString, openValidatedImage, closeValidatedImage, validateOutputPath, assertSafeBaseFilename, getErrorMessage, toWinstonLevel, } from './utils.js';
+import { decodeBase64Image, parseSSEStream, readStreamToString, openValidatedImage, closeValidatedImage, validateOutputPath, assertSafeBaseFilename, getErrorMessage, createPackageLogger, assertHttpsBaseUrl, redactKey, } from './utils.js';
 export { OpenAIImageAPIError } from './errors.js';
 export { OpenAIAdminAPI } from './admin-api.js';
 export { assessImageCosts } from './cost.js';
@@ -101,19 +100,12 @@ export class OpenAIImageAPI {
      * @param options.skipValidation - Send requests without the client-side constraint check (default: false)
      */
     constructor({ apiKey = null, baseUrl = BASE_URL, logLevel = 'WARNING', rateLimitDelay = 1000, requestTimeout = DEFAULT_REQUEST_TIMEOUT, skipValidation = false, } = {}) {
-        // Setup logging
-        this.logger = winston.createLogger({
-            level: toWinstonLevel(logLevel),
-            format: winston.format.combine(winston.format.timestamp(), winston.format.printf(({ timestamp, level, message }) => {
-                return `${String(timestamp)} - ${level.toUpperCase()} - ${String(message)}`;
-            })),
-            transports: [new winston.transports.Console()],
-        });
-        // Validate baseUrl uses HTTPS
-        if (baseUrl && !baseUrl.startsWith('https://')) {
-            throw new OpenAIImageAPIError('API base URL must use HTTPS protocol for security', {
-                type: 'configuration_error',
-            });
+        this.logger = createPackageLogger(logLevel);
+        try {
+            assertHttpsBaseUrl(baseUrl);
+        }
+        catch (error) {
+            throw new OpenAIImageAPIError(getErrorMessage(error), { type: 'configuration_error' });
         }
         // Set API key
         this.apiKey = apiKey || getOpenAIApiKey();
@@ -144,10 +136,7 @@ export class OpenAIImageAPI {
      * @returns Redacted API key showing only last 4 characters
      */
     _redactApiKey(apiKey) {
-        if (!apiKey || apiKey.length < 8) {
-            return '[REDACTED]';
-        }
-        return `sk-...${apiKey.slice(-4)}`;
+        return redactKey(apiKey);
     }
     /**
      * Log a one-time warning when a model with an announced shutdown is used.
