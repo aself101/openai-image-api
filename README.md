@@ -573,7 +573,7 @@ The suite has 247 tests across five files:
 - **cli-core** — in-process tests of the CLI logic (`src/cli-core.ts`): option parsing and enum checks, model resolution, cross-flag validation, job construction, `runCli` exit codes for dry runs and batch failures.
 - **cli** — subprocess smoke tests against the built `dist/cli.js`: `--dry-run` validation failures exit non-zero with the validator's message, `--model` rejects removed ids, invalid enum flags are refused before any request.
 
-Network calls are mocked. Live verification of streaming, editing, and the `input_fidelity` behaviour was performed against the real API on 2026-09-20 during the 3.0.0 work; it is not part of `npm test`.
+Network calls are mocked. Live verification of streaming, editing, and the `input_fidelity` behaviour was performed against the real API on 2026-09-20 and again from the published 3.0.0 tarball on 2026-09-21; it is not part of `npm test`.
 
 ## Error Handling
 
@@ -680,6 +680,22 @@ Other behaviour changes:
 - **Library log level defaults to `WARNING`** (was `INFO`): `new OpenAIImageAPI()` no longer writes a progress line to stdout on every request. Pass `logLevel: 'INFO'` to restore. The CLI is unchanged (`--log-level`, default INFO).
 - **Bounded buffers.** Buffered responses are capped at 256 MiB (`maxContentLength`/`maxBodyLength`) and a single SSE event at 128 MiB; both are far above any real image and exist so a hostile or broken upstream cannot exhaust memory.
 - Removed utilities: `validateImageUrl`, `downloadImage`, `imageToBase64`, `validateImageFile`, `pause` (`openai-image-api/utils`). The first three served DALL-E URL responses; the package no longer fetches anything but the API itself. `RequestOptions` and `ImageFileConstraints` types are gone with them.
+
+## Releasing
+
+Releases are published by hand; CI (`.github/workflows/ci.yml`) gates every push and pull request but never publishes.
+
+```bash
+npm run verify                       # lint, format, type-check src + tests, build, test
+npm run check:reference              # config still matches OpenAI's published reference
+# edit CHANGELOG.md: move [Unreleased] under a new version heading with today's date
+npm version <major|minor|patch> -m "chore(release): %s"   # bumps package.json, commits, tags v<version>
+npm publish                          # prompts for the npm one-time password
+git push origin main --follow-tags
+gh release create v<version> --notes-from-tag  # optional
+```
+
+`prepublishOnly` rebuilds `dist/` before the tarball is made; the committed `dist/` must already match (`git diff --exit-code dist/` after `npm run build`) or CI on the release commit fails. Check the tarball once with `npm pack --dry-run`: `dist/`, `src/`, `README.md`, `LICENSE`, nothing else.
 
 ## Additional Resources
 
